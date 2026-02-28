@@ -210,6 +210,8 @@ class _LoginScreenState extends State<LoginScreen> {
         tenantName: await _effectiveTenantNameForToken(token),
       );
 
+      await _hydrateTenantNameFromServerIfMissing(token);
+
       // Optional: lock tenant if chosen.
       final tenantId = await _effectiveTenantIdForToken(token);
       if (tenantId != null && tenantId.isNotEmpty) {
@@ -286,6 +288,41 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  Future<void> _hydrateTenantNameFromServerIfMissing(String token) async {
+    try {
+      final tenantId = await _effectiveTenantIdForToken(token);
+      if (tenantId == null || tenantId.trim().isEmpty) return;
+
+      final existingName = await _effectiveTenantNameForToken(token);
+      if (existingName != null && existingName.trim().isNotEmpty) return;
+
+      final optionsRes = await _api.tenantOptions(email: _email);
+      if (!optionsRes.success) return;
+
+      final options = optionsRes.data ?? const <MobileTenantOption>[];
+      if (options.isEmpty) return;
+
+      await widget.session.cacheTenantOptions(email: _email, options: options);
+
+      final match = options
+          .where((o) => o.tenantId.trim() == tenantId.trim())
+          .toList();
+      if (match.isEmpty) return;
+
+      final name = match.first.tenantName.trim();
+      if (name.isEmpty) return;
+
+      await widget.session.signIn(
+        email: _email,
+        token: token,
+        tenantId: tenantId,
+        tenantName: name,
+      );
+    } catch (_) {
+      // Best-effort only.
     }
   }
 
