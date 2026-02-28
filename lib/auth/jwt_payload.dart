@@ -28,6 +28,18 @@ class JwtPayload {
     return (v ?? '').toString();
   }
 
+  String? get tenantId {
+    final v = claims['gtapp_tenant_id'] ?? claims['tenantId'];
+    final s = (v ?? '').toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  String? get tenantName {
+    final v = claims['gtapp_tenant_name'] ?? claims['tenantName'];
+    final s = (v ?? '').toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
   bool get canAccessPlatformLogin {
     final v = claims['can_access_platform_login'];
     if (v is bool) return v;

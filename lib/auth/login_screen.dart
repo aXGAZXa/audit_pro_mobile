@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'auth_session.dart';
+import 'jwt_payload.dart';
 import 'mobile_auth_api.dart';
 import 'mobile_auth_models.dart';
 import '../screens/company_select_screen.dart';
@@ -205,12 +206,12 @@ class _LoginScreenState extends State<LoginScreen> {
       await widget.session.signIn(
         email: _email,
         token: token,
-        tenantId: _selectedTenant?.tenantId,
-        tenantName: _selectedTenant?.tenantName,
+        tenantId: await _effectiveTenantIdForToken(token),
+        tenantName: await _effectiveTenantNameForToken(token),
       );
 
       // Optional: lock tenant if chosen.
-      final tenantId = _selectedTenant?.tenantId;
+      final tenantId = await _effectiveTenantIdForToken(token);
       if (tenantId != null && tenantId.isNotEmpty) {
         try {
           final lockRes = await _api.lockTenant(
@@ -286,6 +287,36 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
+  }
+
+  Future<String?> _effectiveTenantIdForToken(String token) async {
+    final explicit = (_selectedTenant?.tenantId ?? '').trim();
+    if (explicit.isNotEmpty) return explicit;
+
+    final payload = JwtPayload.tryParse(token);
+    return (payload?.tenantId ?? '').trim().isEmpty ? null : payload!.tenantId;
+  }
+
+  Future<String?> _effectiveTenantNameForToken(String token) async {
+    final explicit = (_selectedTenant?.tenantName ?? '').trim();
+    if (explicit.isNotEmpty) return explicit;
+
+    final payload = JwtPayload.tryParse(token);
+    final nameFromToken = (payload?.tenantName ?? '').trim();
+    if (nameFromToken.isNotEmpty) return nameFromToken;
+
+    final tenantId = (payload?.tenantId ?? '').trim();
+    if (tenantId.isEmpty) return null;
+
+    final cached = await widget.session.readCachedTenantOptions(email: _email);
+    for (final o in cached) {
+      if (o.tenantId.trim() == tenantId) {
+        final n = o.tenantName.trim();
+        return n.isEmpty ? null : n;
+      }
+    }
+
+    return null;
   }
 
   @override

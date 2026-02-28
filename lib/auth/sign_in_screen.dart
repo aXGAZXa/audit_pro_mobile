@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../screens/company_select_screen.dart';
 import 'auth_session.dart';
+import 'jwt_payload.dart';
 import 'mobile_auth_api.dart';
 import 'mobile_auth_models.dart';
 
@@ -161,12 +162,12 @@ class _SignInScreenState extends State<SignInScreen> {
       await widget.session.signIn(
         email: _email,
         token: token,
-        tenantId: _selectedCompany?.tenantId,
-        tenantName: _selectedCompany?.tenantName,
+        tenantId: await _effectiveTenantIdForToken(token),
+        tenantName: await _effectiveTenantNameForToken(token),
       );
       if (!mounted) return;
 
-      final tenantId = _selectedCompany?.tenantId;
+      final tenantId = await _effectiveTenantIdForToken(token);
       if (tenantId != null && tenantId.isNotEmpty) {
         await _api.lockTenant(token: token, tenantId: tenantId);
       }
@@ -185,6 +186,37 @@ class _SignInScreenState extends State<SignInScreen> {
         });
       }
     }
+  }
+
+  Future<String?> _effectiveTenantIdForToken(String token) async {
+    final explicit = (_selectedCompany?.tenantId ?? '').trim();
+    if (explicit.isNotEmpty) return explicit;
+
+    final payload = JwtPayload.tryParse(token);
+    final inferred = (payload?.tenantId ?? '').trim();
+    return inferred.isEmpty ? null : inferred;
+  }
+
+  Future<String?> _effectiveTenantNameForToken(String token) async {
+    final explicit = (_selectedCompany?.tenantName ?? '').trim();
+    if (explicit.isNotEmpty) return explicit;
+
+    final payload = JwtPayload.tryParse(token);
+    final nameFromToken = (payload?.tenantName ?? '').trim();
+    if (nameFromToken.isNotEmpty) return nameFromToken;
+
+    final tenantId = (payload?.tenantId ?? '').trim();
+    if (tenantId.isEmpty) return null;
+
+    final cached = await widget.session.readCachedTenantOptions(email: _email);
+    for (final o in cached) {
+      if (o.tenantId.trim() == tenantId) {
+        final n = o.tenantName.trim();
+        return n.isEmpty ? null : n;
+      }
+    }
+
+    return null;
   }
 
   @override
