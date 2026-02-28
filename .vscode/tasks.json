@@ -1,0 +1,22 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "apm: ensure android emulator",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/tools/ensure_android_emulator.ps1",
+        "-DeviceId",
+        "emulator-5554",
+        "-EmulatorName",
+        "Pixel_7"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

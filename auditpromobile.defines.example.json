@@ -1,0 +1,6 @@
+{
+  "APM_API_BASE_URL": "https://admin-portal.audit-pro.co.uk",
+  "PORTAL_BASE_URL": "https://buildingservices-portal.co.uk/",
+  "APM_MOBILE_AUTH_API_KEY": "replace_me",
+  "APM_DEFINES_SOURCE": "root-json"
+}

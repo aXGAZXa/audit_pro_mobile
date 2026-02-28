@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Audit Pro Mobile (Android)",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "debug",
+      "program": "lib/main.dart",
+      "cwd": "c:/Users/gaz70/source/VSCode/Dart/audit_pro_mobile",
+      "preLaunchTask": "apm: ensure android emulator",
+      "deviceId": "emulator-5554",
+      "toolArgs": [
+        "--dart-define-from-file",
+        "auditpromobile.defines.json"
+      ]
+    }
+  ]
+}
