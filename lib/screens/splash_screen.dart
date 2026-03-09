@@ -2,7 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
 import '../auth/auth_session.dart';
+import '../apm/services/apk_download_service.dart';
+import '../apm/services/app_info_service.dart';
+import '../apm/services/apm_portal_update_service.dart';
+import '../apm/services/update_coordinator.dart';
+import '../apm/services/update_state_store.dart';
 import '../apm/forms/heat_network_assessment/hna_web_editor_screen.dart';
+import 'update_required_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({
@@ -41,6 +47,7 @@ class _SplashScreenState extends State<SplashScreen> {
             builder: (_) => HnaWebEditorScreen(
               ticket: deepLink.ticket,
               returnUrl: deepLink.returnUrl,
+              mode: deepLink.mode,
             ),
           ),
         );
@@ -49,6 +56,7 @@ class _SplashScreenState extends State<SplashScreen> {
     }
 
     // Small delay to avoid a flash on fast loads.
+    final navigator = Navigator.of(context);
     await Future.delayed(const Duration(milliseconds: 400));
 
     if (!mounted || _hasNavigated) return;
@@ -58,9 +66,43 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!mounted || _hasNavigated) return;
 
     final hasSession = widget.session.state.value != null;
+
+    // Mirroring MLApp update flow: if a newer build is required, block and
+    // present a download/install screen.
+    if (hasSession && !kIsWeb) {
+      try {
+        final coordinator = UpdateCoordinator(
+          updateService: ApmPortalUpdateService(session: widget.session),
+          stateStore: UpdateStateStore(),
+          appInfoService: AppInfoService(),
+        );
+
+        final result = await coordinator.checkForUpdates();
+        if (mounted && !_hasNavigated && result.checkResult.isUpdateRequired) {
+          _hasNavigated = true;
+          navigator.pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => UpdateRequiredScreen(
+                checkResult: result.checkResult,
+                apkDownloadService: ApkDownloadService(),
+                continueRouteName: hasSession ? '/home' : '/login',
+                onRecheck: () async {
+                  final res = await coordinator.checkForUpdates();
+                  return res.checkResult;
+                },
+              ),
+            ),
+          );
+          return;
+        }
+      } catch (_) {
+        // Best-effort: if update check fails, allow the user to proceed.
+      }
+    }
+
     _hasNavigated = true;
 
-    Navigator.of(context).pushReplacementNamed(hasSession ? '/home' : '/login');
+    navigator.pushReplacementNamed(hasSession ? '/home' : '/login');
   }
 
   _EditorDeepLink? _tryReadEditorDeepLink() {
@@ -95,9 +137,12 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!_looksLikeGuid(ticket)) return null;
 
     final returnUrl = (uri.queryParameters['returnUrl'] ?? '').trim();
+
+    final mode = (uri.queryParameters['mode'] ?? '').trim();
     return _EditorDeepLink(
       ticket: ticket,
       returnUrl: returnUrl.isEmpty ? null : Uri.decodeComponent(returnUrl),
+      mode: mode.isEmpty ? null : mode,
     );
   }
 
@@ -148,8 +193,13 @@ class _SplashScreenState extends State<SplashScreen> {
 }
 
 class _EditorDeepLink {
-  const _EditorDeepLink({required this.ticket, required this.returnUrl});
+  const _EditorDeepLink({
+    required this.ticket,
+    required this.returnUrl,
+    required this.mode,
+  });
 
   final String ticket;
   final String? returnUrl;
+  final String? mode;
 }

@@ -1,13 +1,12 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import '../../../database/database_helper.dart';
-import '../../../models/dhw_plant.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
-import '../../../components/observations_list_screen.dart';
+import 'package:uuid/uuid.dart';
+import '../../../services/platform/image_persistence.dart';
+
+import 'hna_observations_list_screen.dart';
 
 class AddDhwPlantScreen extends StatefulWidget {
   const AddDhwPlantScreen({super.key});
@@ -32,8 +31,13 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
   final _otherTypeController = TextEditingController();
   final _otherFuelController = TextEditingController();
 
-  int? _formId;
-  DhwPlant? _existingItem;
+  Map<String, dynamic>? _assetsJson;
+  void Function(Map<String, dynamic> nextAssets)? _onAssetsChanged;
+  List<Map<String, dynamic>>? _observationsJson;
+  void Function(List<Map<String, dynamic>> nextObservations)?
+  _onObservationsChanged;
+
+  Map<String, dynamic>? _existingItem;
 
   String? _selectedAge;
   String? _condition;
@@ -69,45 +73,67 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
     super.didChangeDependencies();
     final args =
         ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    if (args != null && _formId == null) {
-      _formId = args['formId'] as int?;
+    if (args == null || _assetsJson != null) return;
 
-      final rawItem = args['plant'];
-      if (rawItem is DhwPlant) {
-        _existingItem = rawItem;
-        _loadExistingData();
-      }
+    final assets = args['assetsJson'];
+    final onAssetsChanged = args['onAssetsChanged'];
+    _assetsJson = assets is Map ? Map<String, dynamic>.from(assets) : null;
+    _onAssetsChanged = onAssetsChanged is Function
+        ? (onAssetsChanged as void Function(Map<String, dynamic>))
+        : null;
+
+    final obs = args['observationsJson'];
+    _observationsJson = obs is List
+        ? obs
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : null;
+
+    final onObsChanged = args['onObservationsChanged'];
+    _onObservationsChanged = onObsChanged is Function
+        ? (onObsChanged as void Function(List<Map<String, dynamic>>))
+        : null;
+
+    final rawItem = args['plant'];
+    if (rawItem is Map) {
+      _existingItem = Map<String, dynamic>.from(rawItem);
+      _loadExistingData();
     }
   }
 
   void _loadExistingData() {
     if (_existingItem == null) return;
 
-    _makeController.text = _existingItem!.make;
-    _modelController.text = _existingItem!.model;
-    _locationController.text = _existingItem!.location;
-    _selectedAge = _normalizeAgeBand(_existingItem!.ageRange);
-    _serialNumberController.text = _existingItem!.serialNumber ?? '';
-    _capacityController.text = _existingItem!.capacity ?? '';
-    _heatInputController.text = _existingItem!.heatInput ?? '';
-    _condition = _existingItem!.condition.isEmpty
-        ? null
-        : _existingItem!.condition;
-    _operational = _existingItem!.operational == 'Unknown'
-        ? null
-        : _existingItem!.operational;
+    final item = _existingItem!;
+    _makeController.text = (item['make'] ?? '').toString();
+    _modelController.text = (item['model'] ?? '').toString();
+    _locationController.text = (item['location'] ?? '').toString();
+    _selectedAge = _normalizeAgeBand((item['ageRange'] ?? '').toString());
+    _serialNumberController.text = (item['serialNumber'] ?? '').toString();
+    _capacityController.text = (item['capacity'] ?? '').toString();
+    _heatInputController.text = (item['heatInput'] ?? '').toString();
 
-    if (_plantTypes.contains(_existingItem!.plantType)) {
-      _selectedType = _existingItem!.plantType;
+    final condition = (item['condition'] ?? '').toString();
+    _condition = condition.trim().isEmpty ? null : condition;
+
+    final operational = (item['operational'] ?? '').toString();
+    _operational = operational.trim().isEmpty || operational == 'Unknown'
+        ? null
+        : operational;
+
+    final plantType = (item['plantType'] ?? '').toString();
+    if (_plantTypes.contains(plantType)) {
+      _selectedType = plantType;
       _isOtherType = _selectedType == 'Other';
     } else {
       _selectedType = 'Other';
       _isOtherType = true;
-      _otherTypeController.text = _existingItem!.plantType;
+      _otherTypeController.text = plantType;
     }
 
-    final fuel = _existingItem!.fuelType;
-    if (fuel != null && fuel.isNotEmpty) {
+    final fuel = (item['fuelType'] ?? '').toString();
+    if (fuel.trim().isNotEmpty) {
       if (_fuelTypes.contains(fuel)) {
         _selectedFuel = fuel;
         _isOtherFuel = fuel == 'Other';
@@ -118,8 +144,15 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
       }
     }
 
-    if (_existingItem!.imagePaths.isNotEmpty) {
-      _images = _existingItem!.imagePaths.map((path) => XFile(path)).toList();
+    final imagePathsRaw = item['imagePaths'];
+    final imagePaths = imagePathsRaw is List
+        ? imagePathsRaw
+              .map((e) => e.toString())
+              .where((e) => e.trim().isNotEmpty)
+              .toList(growable: false)
+        : <String>[];
+    if (imagePaths.isNotEmpty) {
+      _images = imagePaths.map((path) => XFile(path)).toList();
     }
 
     setState(() {});
@@ -166,37 +199,47 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
         '${_makeController.text.trim()} ${_modelController.text.trim()}'.trim();
     if (makeModel.isNotEmpty) return makeModel;
     if (_existingItem != null) {
-      final existing = '${_existingItem!.make} ${_existingItem!.model}'.trim();
+      final make = (_existingItem!['make'] ?? '').toString();
+      final model = (_existingItem!['model'] ?? '').toString();
+      final existing = '$make $model'.trim();
       if (existing.isNotEmpty) return existing;
     }
     return 'DHW Plant';
   }
 
   Future<void> _manageObservations() async {
-    if (_formId == null) return;
+    final obs = _observationsJson;
+    final onObsChanged = _onObservationsChanged;
+    if (obs == null || onObsChanged == null) return;
 
-    if (_existingItem?.id == null) {
-      final saved = await _saveInternal();
+    if (_existingItem == null ||
+        (_existingItem!['id'] ?? '').toString().isEmpty) {
+      final saved = await _saveInternal(requireImage: false);
       if (!saved || !mounted) return;
     }
 
-    final itemId = _existingItem?.id;
-    if (itemId == null) return;
+    final itemId = (_existingItem?['id'] ?? '').toString().trim();
+    if (itemId.isEmpty) return;
 
-    Navigator.push(
+    final makeModel = _getAssetMakeModel();
+    final questionText =
+        'DHW Plant${makeModel.isNotEmpty ? ' - $makeModel' : ''}';
+
+    await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => const ObservationsListScreen(),
-        settings: RouteSettings(
-          arguments: {
-            'formId': _formId,
-            'questionReference': 'dhw_plant_item_$itemId',
-            'questionText': 'DHW Plant Observations',
-            'sectionName': 'On-Site Generation & Distribution',
-            'assetId': itemId,
-            'assetType': 'DHW Plant',
-            'assetMakeModel': _getAssetMakeModel(),
+        builder: (context) => HnaObservationsListScreen(
+          observationsJson: obs,
+          onObservationsChanged: (next) {
+            _observationsJson = next;
+            onObsChanged(next);
           },
+          questionReference: 'dhw_$itemId',
+          questionText: questionText,
+          sectionName: 'On-Site Generation & Distribution',
+          assetId: itemId,
+          assetType: 'DHW Plant',
+          assetMakeModel: makeModel,
         ),
       ),
     );
@@ -205,12 +248,14 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
   Future<void> _saveAndClose() async {
     final success = await _saveInternal();
     if (success && mounted) {
-      Navigator.pop(context);
+      Navigator.pop(context, _existingItem);
     }
   }
 
-  Future<bool> _saveInternal() async {
-    if (_formId == null) return false;
+  Future<bool> _saveInternal({bool requireImage = true}) async {
+    final assets = _assetsJson;
+    final onAssetsChanged = _onAssetsChanged;
+    if (assets == null || onAssetsChanged == null) return false;
 
     if (_selectedType == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -244,7 +289,7 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
 
     if (!_formKey.currentState!.validate()) return false;
 
-    if (_images.isEmpty) {
+    if (requireImage && _images.isEmpty) {
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -268,21 +313,7 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
       await _modelFieldKey.currentState?.saveSuggestion();
       await _locationFieldKey.currentState?.saveSuggestion();
 
-      final List<String> imagePaths = [];
-      final appDir = await getApplicationDocumentsDirectory();
-
-      for (final image in _images) {
-        final path = image.path;
-        if (path.startsWith(appDir.path)) {
-          imagePaths.add(path);
-        } else {
-          final fileName =
-              'dhw_${DateTime.now().millisecondsSinceEpoch}_${imagePaths.length}.jpg';
-          final savedImage = File('${appDir.path}/$fileName');
-          await File(path).copy(savedImage.path);
-          imagePaths.add(savedImage.path);
-        }
-      }
+      final imagePaths = await persistPickedImagePaths(_images, prefix: 'dhw');
 
       String toCamelCase(String text) {
         if (text.isEmpty) return text;
@@ -295,52 +326,57 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
             .join(' ');
       }
 
-      final item = DhwPlant(
-        id: _existingItem?.id,
-        formId: _formId!,
-        plantType: _getFinalType(),
-        fuelType: _selectedType == 'DHW heater' ? _getFinalFuel() : null,
-        location: toCamelCase(_locationController.text.trim()),
-        make: toCamelCase(_makeController.text.trim()),
-        model: _modelController.text.trim(),
-        serialNumber: _serialNumberController.text.trim().isEmpty
+      final existingId = (_existingItem?['id'] ?? '').toString().trim();
+      final id = existingId.isNotEmpty ? existingId : const Uuid().v4();
+      final now = DateTime.now().toUtc().toIso8601String();
+
+      final item = <String, dynamic>{
+        'id': id,
+        'plantType': _getFinalType(),
+        'fuelType': _selectedType == 'DHW heater' ? _getFinalFuel() : null,
+        'location': toCamelCase(_locationController.text.trim()),
+        'make': toCamelCase(_makeController.text.trim()),
+        'model': _modelController.text.trim(),
+        'serialNumber': _serialNumberController.text.trim().isEmpty
             ? null
             : _serialNumberController.text.trim(),
-        capacity: _capacityController.text.trim().isEmpty
+        'capacity': _capacityController.text.trim().isEmpty
             ? null
             : _capacityController.text.trim(),
-        heatInput: _heatInputController.text.trim().isEmpty
+        'heatInput': _heatInputController.text.trim().isEmpty
             ? null
             : _heatInputController.text.trim(),
-        ageRange: _selectedAge ?? '',
-        condition: _condition ?? '',
-        operational: _operational,
-        imagePaths: imagePaths,
-        createdAt: _existingItem?.createdAt,
-        updatedAt: DateTime.now(),
-      );
+        'ageRange': _selectedAge ?? '',
+        'condition': _condition ?? '',
+        'operational': _operational,
+        'imagePaths': imagePaths,
+        'updatedAt': now,
+        'createdAt': (_existingItem?['createdAt'] ?? now),
+      };
 
-      final savedId = await DatabaseHelper.instance.saveDhwPlant(item);
+      final rawList = assets['dhwPlants'];
+      final list = rawList is List
+          ? rawList
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList(growable: true)
+          : <Map<String, dynamic>>[];
 
+      final idx = list.indexWhere((x) => (x['id'] ?? '').toString() == id);
+      if (idx >= 0) {
+        list[idx] = item;
+      } else {
+        list.add(item);
+      }
+
+      final nextAssets = Map<String, dynamic>.from(assets);
+      nextAssets['dhwPlants'] = list;
+      onAssetsChanged(nextAssets);
+      _assetsJson = nextAssets;
+
+      if (!mounted) return true;
       setState(() {
-        _existingItem = DhwPlant(
-          id: savedId,
-          formId: item.formId,
-          plantType: item.plantType,
-          fuelType: item.fuelType,
-          location: item.location,
-          make: item.make,
-          model: item.model,
-          serialNumber: item.serialNumber,
-          capacity: item.capacity,
-          heatInput: item.heatInput,
-          ageRange: item.ageRange,
-          condition: item.condition,
-          operational: item.operational,
-          imagePaths: item.imagePaths,
-          createdAt: item.createdAt,
-          updatedAt: item.updatedAt,
-        );
+        _existingItem = item;
         _isLoading = false;
       });
 
@@ -596,8 +632,7 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
                     return AppSelectionCard(
                       title: val,
                       subtitle: 'Can you tell from sight?',
-                      icon:
-                          val == 'Yes' ? Icons.check_circle : Icons.cancel,
+                      icon: val == 'Yes' ? Icons.check_circle : Icons.cancel,
                       color: val == 'Yes' ? Colors.green : Colors.red,
                       selected: _operational == val,
                       onTap: () {
@@ -700,6 +735,7 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
     _locationController.dispose();
     _serialNumberController.dispose();
     _capacityController.dispose();
+    _heatInputController.dispose();
     _otherTypeController.dispose();
     _otherFuelController.dispose();
     super.dispose();

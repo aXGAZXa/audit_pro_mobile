@@ -1,22 +1,23 @@
-import 'dart:io';
 import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import '../../../components/form_widgets.dart';
-import '../../../database/database_helper.dart';
-import '../../condition_report/screens/unsafe_reports_screen.dart';
+
+import 'hna_unsafe_reports_screen.dart';
 
 class HNAUnsafeSituationsScreen extends StatefulWidget {
   final Map<String, dynamic> formData;
+  final Map<String, dynamic> unsafeJson;
+  final ValueChanged<Map<String, dynamic>> onUnsafeChanged;
   final VoidCallback onNext;
   final VoidCallback onBack;
-  final int? formId;
 
   const HNAUnsafeSituationsScreen({
     super.key,
     required this.formData,
+    required this.unsafeJson,
+    required this.onUnsafeChanged,
     required this.onNext,
     required this.onBack,
-    this.formId,
   });
 
   @override
@@ -26,49 +27,84 @@ class HNAUnsafeSituationsScreen extends StatefulWidget {
 
 class _HNAUnsafeSituationsScreenState extends State<HNAUnsafeSituationsScreen> {
   List<Map<String, dynamic>> _unsafeSituations = [];
-  Map<int, bool> _reportingStatus = {}; // observationId -> isReported
-  bool _isLoading = true;
+  Map<String, bool> _reportingStatus = {}; // observationId -> isReported
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
-    _loadUnsafeSituations();
+    _hydrateFromJson();
   }
 
-  Future<void> _loadUnsafeSituations() async {
-    if (widget.formId == null) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-      return;
+  @override
+  void didUpdateWidget(covariant HNAUnsafeSituationsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.unsafeJson != widget.unsafeJson) {
+      _hydrateFromJson();
     }
+  }
 
+  List<Map<String, dynamic>> _asListOfMaps(dynamic value) {
+    if (value is List<Map<String, dynamic>>) return value;
+    if (value is List) {
+      return value
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: false);
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  void _hydrateFromJson() {
     setState(() => _isLoading = true);
 
     try {
-      final situations = await DatabaseHelper.instance.getUnsafeObservations(
-        widget.formId!,
+      final unsafeObservations = _asListOfMaps(
+        widget.unsafeJson['unsafeObservations'],
+      );
+      final unreportedUnsafe = _asListOfMaps(
+        widget.unsafeJson['unreportedUnsafeObservations'],
       );
 
-      // Check reporting status for each observation
-      final Map<int, bool> statusMap = {};
-      for (final situation in situations) {
-        final observationId = situation['id'] as int;
-        final isReported = await DatabaseHelper.instance.isObservationReported(
-          observationId,
-        );
-        statusMap[observationId] = isReported;
+      final byId = <String, Map<String, dynamic>>{};
+      var tmpIndex = 0;
+      for (final obs in [...unsafeObservations, ...unreportedUnsafe]) {
+        final id = obs['id'];
+        final key = (id == null || id.toString().trim().isEmpty)
+            ? 'tmp_${tmpIndex++}'
+            : id.toString();
+        byId[key] = obs;
+      }
+
+      final reports = _asListOfMaps(widget.unsafeJson['unsafeReports']);
+      final reportedObsIds = <String>{};
+      for (final r in reports) {
+        final ids = r['observationIds'] ?? r['observation_ids'];
+        if (ids is List) {
+          for (final x in ids) {
+            final s = x?.toString().trim();
+            if (s != null && s.isNotEmpty) reportedObsIds.add(s);
+          }
+        }
+      }
+
+      final situations = byId.values.toList(growable: false);
+      final status = <String, bool>{};
+      for (final s in situations) {
+        final id = s['id']?.toString().trim();
+        if (id == null || id.isEmpty) continue;
+        status[id] = reportedObsIds.contains(id);
       }
 
       if (mounted) {
         setState(() {
           _unsafeSituations = situations;
-          _reportingStatus = statusMap;
+          _reportingStatus = status;
           _isLoading = false;
         });
       }
     } catch (e) {
-      developer.log('Error loading unsafe situations: $e');
+      developer.log('Error hydrating unsafe situations from JSON: $e');
       if (mounted) {
         setState(() => _isLoading = false);
       }
@@ -113,7 +149,10 @@ class _HNAUnsafeSituationsScreenState extends State<HNAUnsafeSituationsScreen> {
   }
 
   Future<void> _showObservationDetails(Map<String, dynamic> observation) async {
-    final images = observation['images'] as List<dynamic>? ?? [];
+    final images =
+        observation['images'] as List<dynamic>? ??
+        observation['imagePaths'] as List<dynamic>? ??
+        [];
 
     // Build display label from context
     String displayLabel;
@@ -167,8 +206,8 @@ class _HNAUnsafeSituationsScreenState extends State<HNAUnsafeSituationsScreen> {
                   children: images.map((imgPath) {
                     return ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.file(
-                        File(imgPath.toString()),
+                      child: AppResolvedImage(
+                        imagePath: imgPath.toString(),
                         width: 100,
                         height: 100,
                         fit: BoxFit.cover,
@@ -192,6 +231,10 @@ class _HNAUnsafeSituationsScreenState extends State<HNAUnsafeSituationsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final hasReports =
+        (widget.unsafeJson['unsafeReports'] is List) &&
+        (widget.unsafeJson['unsafeReports'] as List).isNotEmpty;
+
     return Column(
       children: [
         Expanded(
@@ -299,7 +342,8 @@ class _HNAUnsafeSituationsScreenState extends State<HNAUnsafeSituationsScreen> {
                           itemCount: _unsafeSituations.length,
                           itemBuilder: (context, index) {
                             final situation = _unsafeSituations[index];
-                            final situationId = situation['id'] as int;
+                            final situationId =
+                                situation['id']?.toString() ?? '';
                             final isReported =
                                 _reportingStatus[situationId] ?? false;
 
@@ -484,16 +528,49 @@ class _HNAUnsafeSituationsScreenState extends State<HNAUnsafeSituationsScreen> {
               children: [
                 if (_unsafeSituations.isNotEmpty) ...[
                   ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.push(
+                    onPressed: () async {
+                      await Navigator.push<void>(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => UnsafeReportsScreen(
-                            formId: widget.formId!,
+                          builder: (context) => HnaUnsafeReportsScreen(
+                            unsafeJson: widget.unsafeJson,
+                            onUnsafeChanged: widget.onUnsafeChanged,
                             onBack: () => Navigator.pop(context),
                           ),
                         ),
-                      ).then((_) => _loadUnsafeSituations());
+                      );
+                      if (!mounted) return;
+                      _hydrateFromJson();
+                    },
+                    icon: const Icon(Icons.description),
+                    label: const Text('View Unsafe Reports'),
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 48),
+                      backgroundColor: Theme.of(
+                        context,
+                      ).colorScheme.primaryContainer,
+                      foregroundColor: Theme.of(
+                        context,
+                      ).colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (_unsafeSituations.isEmpty && hasReports) ...[
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      await Navigator.push<void>(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => HnaUnsafeReportsScreen(
+                            unsafeJson: widget.unsafeJson,
+                            onUnsafeChanged: widget.onUnsafeChanged,
+                            onBack: () => Navigator.pop(context),
+                          ),
+                        ),
+                      );
+                      if (!mounted) return;
+                      _hydrateFromJson();
                     },
                     icon: const Icon(Icons.description),
                     label: const Text('View Unsafe Reports'),

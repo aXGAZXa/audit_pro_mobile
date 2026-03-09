@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import '../../../database/database_helper.dart';
-import '../../../models/plate_heat_exchanger.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/entity_card.dart';
-import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/screens/add_phex_screen.dart';
+import 'add_phex_screen.dart';
 
 class PhexListScreen extends StatefulWidget {
   const PhexListScreen({super.key});
@@ -13,8 +11,12 @@ class PhexListScreen extends StatefulWidget {
 }
 
 class _PhexListScreenState extends State<PhexListScreen> {
-  List<PlateHeatExchanger> _items = [];
-  int? _formId;
+  List<Map<String, dynamic>> _items = [];
+  Map<String, dynamic>? _assetsJson;
+  void Function(Map<String, dynamic> nextAssets)? _onAssetsChanged;
+  List<Map<String, dynamic>>? _observationsJson;
+  void Function(List<Map<String, dynamic>> nextObservations)?
+  _onObservationsChanged;
   bool _readOnly = false;
   bool _isLoading = true;
   final String _title = 'Plate Heat Exchangers';
@@ -51,24 +53,53 @@ class _PhexListScreenState extends State<PhexListScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_formId == null) {
-      final args =
-          ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-      if (args != null) {
-        _formId = args['formId'] as int?;
-        _readOnly = args['readOnly'] as bool? ?? false;
-        _loadItems();
-      }
-    }
+    if (_assetsJson != null) return;
+
+    final args =
+        ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+    if (args == null) return;
+
+    final assets = args['assetsJson'];
+    final onAssetsChanged = args['onAssetsChanged'];
+    _assetsJson = assets is Map ? Map<String, dynamic>.from(assets) : null;
+    _onAssetsChanged = onAssetsChanged is Function
+        ? (onAssetsChanged as void Function(Map<String, dynamic>))
+        : null;
+
+    final obs = args['observationsJson'];
+    _observationsJson = obs is List
+        ? obs
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : null;
+
+    final onObsChanged = args['onObservationsChanged'];
+    final upstreamOnObsChanged = onObsChanged is Function
+        ? (onObsChanged as void Function(List<Map<String, dynamic>>))
+        : null;
+    _onObservationsChanged = upstreamOnObsChanged == null
+        ? null
+        : (next) {
+            _observationsJson = next;
+            upstreamOnObsChanged(next);
+          };
+
+    _readOnly = args['readOnly'] as bool? ?? false;
+    _loadItems();
   }
 
   Future<void> _loadItems() async {
-    if (_formId == null) return;
+    if (_assetsJson == null) return;
 
     setState(() => _isLoading = true);
-    final items = await DatabaseHelper.instance.getPlateHeatExchangers(
-      _formId!,
-    );
+    final raw = _assetsJson!['plateHeatExchangers'];
+    final items = raw is List
+        ? raw
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : <Map<String, dynamic>>[];
 
     setState(() {
       _items = items;
@@ -76,24 +107,76 @@ class _PhexListScreenState extends State<PhexListScreen> {
     });
   }
 
-  void _addItem() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const AddPhexScreen(),
-        settings: RouteSettings(arguments: {'formId': _formId}),
-      ),
-    ).then((_) => _loadItems());
+  void _emitItems(List<Map<String, dynamic>> nextItems) {
+    final assets = _assetsJson;
+    final onAssetsChanged = _onAssetsChanged;
+    if (assets == null || onAssetsChanged == null) return;
+
+    final nextAssets = Map<String, dynamic>.from(assets);
+    nextAssets['plateHeatExchangers'] = nextItems;
+    _assetsJson = nextAssets;
+    onAssetsChanged(nextAssets);
   }
 
-  void _editItem(PlateHeatExchanger item) {
-    Navigator.push(
+  Future<void> _addItem() async {
+    final saved = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
         builder: (context) => const AddPhexScreen(),
-        settings: RouteSettings(arguments: {'formId': _formId, 'phex': item}),
+        settings: RouteSettings(
+          arguments: {
+            'phex': null,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': _onAssetsChanged,
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': _onObservationsChanged,
+          },
+        ),
       ),
-    ).then((_) => _loadItems());
+    );
+
+    if (saved == null) return;
+    _upsertAndRefresh(saved);
+  }
+
+  Future<void> _editItem(Map<String, dynamic> item) async {
+    final saved = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const AddPhexScreen(),
+        settings: RouteSettings(
+          arguments: {
+            'phex': item,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': _onAssetsChanged,
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': _onObservationsChanged,
+          },
+        ),
+      ),
+    );
+
+    if (saved == null) return;
+    _upsertAndRefresh(saved);
+  }
+
+  void _upsertAndRefresh(Map<String, dynamic> saved) {
+    final id = (saved['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
+
+    final nextItems = _items
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: true);
+
+    final index = nextItems.indexWhere((x) => (x['id'] ?? '').toString() == id);
+    if (index >= 0) {
+      nextItems[index] = saved;
+    } else {
+      nextItems.add(saved);
+    }
+
+    _emitItems(nextItems);
+    setState(() => _items = nextItems);
   }
 
   @override
@@ -206,24 +289,36 @@ class _PhexListScreenState extends State<PhexListScreen> {
                           itemCount: _items.length,
                           itemBuilder: (context, index) {
                             final item = _items[index];
-                            final title = '${item.make} ${item.model}';
+                            final make = (item['make'] ?? '').toString();
+                            final model = (item['model'] ?? '').toString();
+                            final title = '$make $model';
+                            final imagePathsRaw = item['imagePaths'];
+                            final imagePaths = imagePathsRaw is List
+                                ? imagePathsRaw
+                                      .map((e) => e.toString())
+                                      .where((p) => p.trim().isNotEmpty)
+                                      .toList(growable: false)
+                                : const <String>[];
+                            final serialNumber = (item['serialNumber'] ?? '')
+                                .toString();
+                            final location = (item['location'] ?? '')
+                                .toString();
 
                             final card = AppEntityCard(
                               title: title.trim().isEmpty
                                   ? 'Unknown PHEX'
                                   : title,
                               subtitle: 'PHEX',
-                              imagePaths: item.imagePaths,
+                              imagePaths: imagePaths,
                               details: [
-                                if (item.serialNumber != null &&
-                                    item.serialNumber!.isNotEmpty)
+                                if (serialNumber.trim().isNotEmpty)
                                   Text(
-                                    'S/N: ${item.serialNumber}',
+                                    'S/N: $serialNumber',
                                     style: Theme.of(
                                       context,
                                     ).textTheme.bodyMedium,
                                   ),
-                                if (item.location.isNotEmpty)
+                                if (location.trim().isNotEmpty)
                                   Row(
                                     children: [
                                       Icon(
@@ -236,7 +331,7 @@ class _PhexListScreenState extends State<PhexListScreen> {
                                       const SizedBox(width: 4),
                                       Expanded(
                                         child: Text(
-                                          item.location,
+                                          location,
                                           style: TextStyle(
                                             color: Theme.of(
                                               context,
@@ -253,15 +348,24 @@ class _PhexListScreenState extends State<PhexListScreen> {
                             if (_readOnly) return card;
 
                             return Dismissible(
-                              key: Key('phex_${item.id ?? index}'),
+                              key: Key(
+                                'phex_${(item['id'] ?? '').toString().trim().isEmpty ? index : item['id']}',
+                              ),
                               direction: DismissDirection.endToStart,
                               confirmDismiss: (direction) =>
                                   _confirmDeleteDialog(),
                               onDismissed: (direction) async {
-                                if (item.id != null) {
-                                  await DatabaseHelper.instance
-                                      .deletePlateHeatExchanger(item.id!);
-                                  _loadItems();
+                                final nextItems = _items
+                                    .where(
+                                      (x) =>
+                                          (x['id'] ?? '').toString() !=
+                                          (item['id'] ?? '').toString(),
+                                    )
+                                    .map((e) => Map<String, dynamic>.from(e))
+                                    .toList(growable: true);
+                                _emitItems(nextItems);
+                                if (mounted) {
+                                  setState(() => _items = nextItems);
                                 }
                               },
                               background: Container(

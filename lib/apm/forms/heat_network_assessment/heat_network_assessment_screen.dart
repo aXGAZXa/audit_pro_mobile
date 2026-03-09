@@ -46,7 +46,22 @@ class _HeatNetworkAssessmentScreenState
   int _clientsSyncNonce = 0;
 
   final Map<String, dynamic> _formData = {};
+  final Map<String, dynamic> _draftDoc = {};
+  Map<String, dynamic> _assetsJson = <String, dynamic>{};
+  Map<String, dynamic> _unsafeJson = <String, dynamic>{};
+  List<Map<String, dynamic>> _observationsJson = <Map<String, dynamic>>[];
+  bool _assetsDirty = false;
+  bool _unsafeDirty = false;
+  bool _observationsDirty = false;
+  int _saveGeneration = 0;
   bool _isLoading = true;
+
+  static const String _formDataKey = 'formData';
+  static const String _assetsKey = 'assets';
+  static const String _unsafeKey = 'unsafe';
+  static const String _observationsKey = 'observations';
+  static const String _submissionSummaryKey = 'submissionSummary';
+  static const String _editSessionKey = 'editSession';
 
   @override
   void initState() {
@@ -115,11 +130,12 @@ class _HeatNetworkAssessmentScreenState
             );
           }
 
-          final formData = form['form_data'] as Map<String, dynamic>;
-          _formData.clear();
-          formData.forEach((key, value) {
-            _formData[key] = _convertFromSerializable(value);
-          });
+          final raw = form['form_data'] as Map<String, dynamic>;
+          final converted = Map<String, dynamic>.from(
+            _convertFromSerializable(raw) as Map,
+          );
+
+          _hydrateFromDraftDoc(converted);
           if (mounted) setState(() => _isLoading = false);
           await _syncClientsBestEffort();
           return;
@@ -146,7 +162,10 @@ class _HeatNetworkAssessmentScreenState
               );
               final loadedData =
                   currentForm['form_data'] as Map<String, dynamic>;
-              _formData.addAll(_convertFromSerializable(loadedData));
+              final converted = Map<String, dynamic>.from(
+                _convertFromSerializable(loadedData) as Map,
+              );
+              _hydrateFromDraftDoc(converted);
               if (mounted) setState(() => _isLoading = false);
               await _syncClientsBestEffort();
               return;
@@ -231,20 +250,174 @@ class _HeatNetworkAssessmentScreenState
   void _updateFormData(String key, dynamic value) {
     setState(() {
       _formData[key] = value;
+      _draftDoc[_formDataKey] = _formData;
     });
     _saveForm(status: 'draft'); // Autosave
   }
 
+  void _updateAssets(Map<String, dynamic> nextAssets) {
+    setState(() {
+      _assetsDirty = true;
+      _assetsJson = Map<String, dynamic>.from(nextAssets);
+      _draftDoc[_assetsKey] = _assetsJson;
+    });
+    _saveForm(status: 'draft');
+  }
+
+  void _updateUnsafe(Map<String, dynamic> nextUnsafe) {
+    setState(() {
+      _unsafeDirty = true;
+      _unsafeJson = Map<String, dynamic>.from(nextUnsafe);
+      _draftDoc[_unsafeKey] = _unsafeJson;
+    });
+    _saveForm(status: 'draft');
+  }
+
+  void _updateObservations(List<Map<String, dynamic>> nextObservations) {
+    setState(() {
+      _observationsDirty = true;
+      _observationsJson = nextObservations
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: true);
+      _draftDoc[_observationsKey] = _observationsJson;
+
+      _reconcileUnsafeFromObservations();
+    });
+    _saveForm(status: 'draft');
+  }
+
+  bool _isUnsafeObservation(Map<String, dynamic> observation) {
+    final raw =
+        observation['is_unsafe'] ??
+        observation['isUnsafe'] ??
+        observation['isUnsafeObservation'];
+    return raw == true || raw == 1;
+  }
+
+  void _reconcileUnsafeFromObservations() {
+    final unsafeFromObs = <Map<String, dynamic>>[];
+    for (final o in _observationsJson) {
+      if (!_isUnsafeObservation(o)) continue;
+
+      final id = (o['id'] ?? '').toString().trim();
+      if (id.isEmpty) continue;
+
+      // Keep both camelCase and legacy snake_case keys for older screens.
+      unsafeFromObs.add({
+        ...o,
+        'question_reference': o['question_reference'] ?? o['questionReference'],
+        'question_text': o['question_text'] ?? o['questionText'],
+        'section_name': o['section_name'] ?? o['sectionName'],
+        'asset_id': o['asset_id'] ?? o['assetId'],
+        'asset_type': o['asset_type'] ?? o['assetType'],
+        'asset_make_model': o['asset_make_model'] ?? o['assetMakeModel'],
+      });
+    }
+
+    // Only overwrite when we have an authoritative source from the main
+    // observations list; otherwise preserve any existing legacy unsafe data.
+    if (unsafeFromObs.isNotEmpty) {
+      _unsafeJson['unsafeObservations'] = unsafeFromObs;
+    } else {
+      _unsafeJson['unsafeObservations'] =
+          (_unsafeJson['unsafeObservations'] is List)
+          ? List<dynamic>.from(_unsafeJson['unsafeObservations'] as List)
+          : <dynamic>[];
+    }
+    _unsafeJson['unsafeReports'] = (_unsafeJson['unsafeReports'] is List)
+        ? List<dynamic>.from(_unsafeJson['unsafeReports'] as List)
+        : <dynamic>[];
+    _unsafeJson['unreportedUnsafeObservations'] =
+        (_unsafeJson['unreportedUnsafeObservations'] is List)
+        ? List<dynamic>.from(
+            _unsafeJson['unreportedUnsafeObservations'] as List,
+          )
+        : <dynamic>[];
+
+    _draftDoc[_unsafeKey] = _unsafeJson;
+  }
+
+  bool _shouldShowUnsafeSituations() {
+    final unsafeObs = _unsafeJson['unsafeObservations'];
+    if (unsafeObs is List && unsafeObs.isNotEmpty) return true;
+
+    final unsafeReports = _unsafeJson['unsafeReports'];
+    if (unsafeReports is List && unsafeReports.isNotEmpty) return true;
+
+    final unreported = _unsafeJson['unreportedUnsafeObservations'];
+    if (unreported is List && unreported.isNotEmpty) return true;
+
+    // Primary signal: any observation flagged unsafe.
+    for (final o in _observationsJson) {
+      if (_isUnsafeObservation(o)) return true;
+    }
+    return false;
+  }
+
   Future<void> _saveForm({String status = 'draft'}) async {
     if (_formId == null) return;
+    final saveGen = ++_saveGeneration;
     try {
-      final dataToSave = _convertToSerializable(_formData);
+      // Persist as a single aggregate doc: { formData, assets, ...meta }.
+      // Safety net: avoid overwriting persisted sections with stale in-memory
+      // values unless that section was actually modified in this parent.
+
+      // If any section is not dirty, prefer the latest persisted draft doc as
+      // the base to avoid clobbering child-screen writes.
+      Map<String, dynamic> baseDoc = Map<String, dynamic>.from(_draftDoc);
+      final shouldReloadBase =
+          !_assetsDirty || !_unsafeDirty || !_observationsDirty;
+      if (shouldReloadBase) {
+        final form = await _db.getForm(_formId!);
+        final raw = form != null ? form['form_data'] : null;
+        if (raw is Map) {
+          baseDoc = Map<String, dynamic>.from(raw);
+        }
+      }
+
+      final docToSave = Map<String, dynamic>.from(baseDoc);
+
+      // Preserve any in-memory non-managed meta keys (e.g. edit session info).
+      for (final entry in _draftDoc.entries) {
+        final key = entry.key.toString();
+        if (key == _formDataKey ||
+            key == _assetsKey ||
+            key == _unsafeKey ||
+            key == _observationsKey) {
+          continue;
+        }
+        docToSave[key] = entry.value;
+      }
+
+      // Always save current formData.
+      docToSave[_formDataKey] = _formData;
+
+      // Only overwrite these sections when changed here, or if missing.
+      if (_assetsDirty || !docToSave.containsKey(_assetsKey)) {
+        docToSave[_assetsKey] = _assetsJson;
+      }
+      if (_unsafeDirty || !docToSave.containsKey(_unsafeKey)) {
+        docToSave[_unsafeKey] = _unsafeJson;
+      }
+      if (_observationsDirty || !docToSave.containsKey(_observationsKey)) {
+        docToSave[_observationsKey] = _observationsJson;
+      }
+
+      final dataToSave = _convertToSerializable(docToSave);
       await _db.saveForm(
         id: _formId,
         formType: 'heat_network_assessment',
         status: status,
         formData: dataToSave,
       );
+
+      // Reset dirty flags after a successful save.
+      // Only the latest in-flight save should clear flags.
+      if (saveGen == _saveGeneration) {
+        _assetsDirty = false;
+        _unsafeDirty = false;
+        _observationsDirty = false;
+      }
     } catch (e, st) {
       ApmLogger.warning(
         'Error saving form formId=$_formId: {Error}',
@@ -265,6 +438,8 @@ class _HeatNetworkAssessmentScreenState
     final shouldShowGenerators =
         _formData['meetsHeatNetworkDefinition'] != 'In-Flat Generation' &&
         _formData['meetsHeatNetworkDefinition'] != null;
+
+    final shouldShowUnsafe = _shouldShowUnsafeSituations();
 
     return [
       HNASiteDetailsScreen(
@@ -288,6 +463,10 @@ class _HeatNetworkAssessmentScreenState
           onNext: _nextPage,
           onBack: _previousPage,
           formId: _formId,
+          assetsJson: _assetsJson,
+          onAssetsChanged: _updateAssets,
+          observationsJson: _observationsJson,
+          onObservationsChanged: _updateObservations,
         ),
       if (shouldShowGenerators)
         HeatGeneratorsScreen(
@@ -296,26 +475,36 @@ class _HeatNetworkAssessmentScreenState
           onNext: _nextPage,
           onBack: _previousPage,
           formId: _formId,
+          assetsJson: _assetsJson,
+          onAssetsChanged: _updateAssets,
+          observationsJson: _observationsJson,
+          onObservationsChanged: _updateObservations,
         ),
       DwellingInspectionsSummaryScreen(
         formData: _formData,
         onDataChanged: _updateFormData,
         onNext: _nextPage,
         onBack: _previousPage,
-        formId: _formId,
+        assetsJson: _assetsJson,
+        onAssetsChanged: _updateAssets,
+        observationsJson: _observationsJson,
+        onObservationsChanged: _updateObservations,
       ),
-      HNAUnsafeSituationsScreen(
-        formData: _formData,
-        onNext: _nextPage,
-        onBack: _previousPage,
-        formId: _formId,
-      ),
+      if (shouldShowUnsafe)
+        HNAUnsafeSituationsScreen(
+          formData: _formData,
+          unsafeJson: _unsafeJson,
+          onUnsafeChanged: _updateUnsafe,
+          onNext: _nextPage,
+          onBack: _previousPage,
+        ),
       AssessmentSummaryScreen(
         formData: _formData,
         onDataChanged: _updateFormData,
         onNext: _nextPage,
         onBack: _previousPage,
         formId: _formId,
+        assetsJson: _assetsJson,
       ),
       HNASummarySignatureScreen(
         formData: _formData,
@@ -327,6 +516,97 @@ class _HeatNetworkAssessmentScreenState
         formId: _formId,
       ),
     ];
+  }
+
+  void _hydrateFromDraftDoc(Map<String, dynamic> converted) {
+    _draftDoc
+      ..clear()
+      ..addAll(converted);
+
+    final rawFormData = _draftDoc[_formDataKey];
+    final rawAssets = _draftDoc[_assetsKey];
+
+    _formData.clear();
+
+    if (rawFormData is Map) {
+      _formData.addAll(Map<String, dynamic>.from(rawFormData));
+    } else {
+      // Legacy draft shape: form fields at the root.
+      // Preserve known meta keys at the root, but wrap the rest under formData.
+      final legacy = Map<String, dynamic>.from(_draftDoc);
+      final meta = <String, dynamic>{};
+      for (final k in [_submissionSummaryKey, _editSessionKey]) {
+        if (legacy.containsKey(k)) {
+          meta[k] = legacy.remove(k);
+        }
+      }
+
+      // If an old draft already had an assets blob at the root, keep it.
+      Map<String, dynamic> assets = <String, dynamic>{};
+      final legacyAssets = legacy.remove(_assetsKey);
+      if (legacyAssets is Map) {
+        assets = Map<String, dynamic>.from(legacyAssets);
+      }
+
+      _formData.addAll(legacy);
+      _draftDoc
+        ..clear()
+        ..addAll(meta)
+        ..[_formDataKey] = _formData
+        ..[_assetsKey] = assets;
+    }
+
+    if (rawAssets is Map) {
+      _assetsJson = Map<String, dynamic>.from(rawAssets);
+    } else {
+      final existing = _draftDoc[_assetsKey];
+      _assetsJson = existing is Map
+          ? Map<String, dynamic>.from(existing)
+          : <String, dynamic>{};
+    }
+
+    final rawUnsafe = _draftDoc[_unsafeKey];
+    _unsafeJson = rawUnsafe is Map
+        ? Map<String, dynamic>.from(rawUnsafe)
+        : <String, dynamic>{};
+
+    // Ensure minimum shapes.
+    _unsafeJson['unsafeObservations'] =
+        (_unsafeJson['unsafeObservations'] is List)
+        ? List<dynamic>.from(_unsafeJson['unsafeObservations'] as List)
+        : <dynamic>[];
+    _unsafeJson['unsafeReports'] = (_unsafeJson['unsafeReports'] is List)
+        ? List<dynamic>.from(_unsafeJson['unsafeReports'] as List)
+        : <dynamic>[];
+    _unsafeJson['unreportedUnsafeObservations'] =
+        (_unsafeJson['unreportedUnsafeObservations'] is List)
+        ? List<dynamic>.from(
+            _unsafeJson['unreportedUnsafeObservations'] as List,
+          )
+        : <dynamic>[];
+
+    final rawObservations = _draftDoc[_observationsKey];
+    final obsList = rawObservations is List
+        ? rawObservations
+        : const <dynamic>[];
+    _observationsJson = obsList
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: true);
+    _draftDoc[_observationsKey] = _observationsJson;
+
+    _reconcileUnsafeFromObservations();
+
+    // Ensure minimum shape.
+    _assetsJson.putIfAbsent('heatMeters', () => <dynamic>[]);
+    _draftDoc[_assetsKey] = _assetsJson;
+    _draftDoc[_unsafeKey] = _unsafeJson;
+    _draftDoc[_formDataKey] = _formData;
+
+    // Initial hydration should not mark any section as dirty.
+    _assetsDirty = false;
+    _unsafeDirty = false;
+    _observationsDirty = false;
   }
 
   Future<void> _completeAndSubmit() async {
@@ -376,25 +656,6 @@ class _HeatNetworkAssessmentScreenState
   void _previousPage() async {
     _saveForm();
     if (_currentPage > 0) {
-      final pages = _buildPages();
-      // Check if previous page is UnsafeSituationsScreen and should be skipped
-      if (_currentPage - 1 >= 0 &&
-          pages[_currentPage - 1] is HNAUnsafeSituationsScreen &&
-          _formId != null) {
-        final unsafeObservations = await _db.getUnsafeObservations(_formId!);
-        if (unsafeObservations.isEmpty) {
-          // Skip back 2 pages
-          if (_currentPage - 2 >= 0) {
-            _pageController.animateToPage(
-              _currentPage - 2,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
-            return;
-          }
-        }
-      }
-
       _pageController.previousPage(
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
@@ -407,24 +668,6 @@ class _HeatNetworkAssessmentScreenState
 
     if (_currentPage < pages.length - 1) {
       _saveForm();
-
-      // Check if next page is UnsafeSituationsScreen and should be skipped
-      if (_currentPage + 1 < pages.length &&
-          pages[_currentPage + 1] is HNAUnsafeSituationsScreen &&
-          _formId != null) {
-        final unsafeObservations = await _db.getUnsafeObservations(_formId!);
-        if (unsafeObservations.isEmpty) {
-          // Skip forward 2 pages to (Unsafe + 1)
-          if (_currentPage + 2 < pages.length) {
-            _pageController.animateToPage(
-              _currentPage + 2,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
-            return;
-          }
-        }
-      }
 
       _pageController.nextPage(
         duration: const Duration(milliseconds: 300),

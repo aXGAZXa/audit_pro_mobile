@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:local_auth/local_auth.dart';
 
+import '../apm/services/apk_download_service.dart';
+import '../apm/services/app_info_service.dart';
+import '../apm/services/apm_portal_update_service.dart';
+import '../apm/services/update_coordinator.dart';
+import '../apm/services/update_state_store.dart';
 import '../app/app_scaffold.dart';
 import '../auth/auth_storage.dart';
 import '../auth/auth_session.dart';
@@ -10,6 +16,7 @@ import '../auth/mobile_auth_models.dart';
 import '../logging/apm_feedback.dart';
 import '../logging/apm_logger.dart';
 import 'company_select_screen.dart';
+import 'update_required_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key, required this.session});
@@ -25,6 +32,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final LocalAuthentication _localAuth = LocalAuthentication();
 
   bool _requestingPlatformAccess = false;
+  bool _checkingForUpdates = false;
+
+  Future<void> _checkForUpdates() async {
+    if (_checkingForUpdates) return;
+
+    if (kIsWeb) {
+      ApmFeedback.info(
+        context,
+        'Updates are not supported in the web version.',
+        category: 'Settings',
+      );
+      return;
+    }
+
+    final auth = widget.session.state.value;
+    if (auth == null) return;
+
+    setState(() => _checkingForUpdates = true);
+
+    try {
+      final coordinator = UpdateCoordinator(
+        updateService: ApmPortalUpdateService(session: widget.session),
+        stateStore: UpdateStateStore(),
+        appInfoService: AppInfoService(),
+      );
+
+      final result = await coordinator.checkForUpdates();
+      if (!mounted) return;
+
+      if (!result.checkResult.isUpdateRequired) {
+        ApmFeedback.success(
+          context,
+          'You are up to date.',
+          category: 'Settings',
+        );
+        return;
+      }
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => UpdateRequiredScreen(
+            checkResult: result.checkResult,
+            apkDownloadService: ApkDownloadService(),
+            continueRouteName: '/settings',
+            onRecheck: () async {
+              final res = await coordinator.checkForUpdates();
+              return res.checkResult;
+            },
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ApmFeedback.error(
+        context,
+        'Unable to check for updates. Please try again later.',
+        category: 'Settings',
+        logMessage: 'Manual update check failed: {Error}',
+        logArgs: [e.toString()],
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _checkingForUpdates = false);
+      }
+    }
+  }
 
   Future<void> _ensurePlatformBiometricsEnabled() async {
     final auth = widget.session.state.value;
@@ -349,6 +422,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: const Text('Change company'),
                   );
                 },
+              ),
+              const SizedBox(height: 12),
+              FilledButton.tonalIcon(
+                onPressed: (auth == null || _checkingForUpdates)
+                    ? null
+                    : _checkForUpdates,
+                icon: _checkingForUpdates
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.system_update_alt),
+                label: Text(
+                  _checkingForUpdates
+                      ? 'Checking for updates...'
+                      : 'Check for updates',
+                ),
               ),
               const SizedBox(height: 20),
               FilledButton.icon(

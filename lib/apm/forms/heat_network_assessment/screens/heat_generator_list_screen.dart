@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../../database/database_helper.dart';
-import '../../../models/heat_generator.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/entity_card.dart';
 import 'add_heat_generator_screen.dart';
@@ -14,8 +12,12 @@ class HeatGeneratorListScreen extends StatefulWidget {
 }
 
 class _HeatGeneratorListScreenState extends State<HeatGeneratorListScreen> {
-  List<HeatGenerator> _items = [];
-  int? _formId;
+  List<Map<String, dynamic>> _items = [];
+  Map<String, dynamic>? _assetsJson;
+  void Function(Map<String, dynamic> nextAssets)? _onAssetsChanged;
+  List<Map<String, dynamic>>? _observationsJson;
+  void Function(List<Map<String, dynamic>> nextObservations)?
+  _onObservationsChanged;
   bool _isLoading = true;
   bool _readOnly = false;
   final String _title = 'Heat Generators';
@@ -52,22 +54,53 @@ class _HeatGeneratorListScreenState extends State<HeatGeneratorListScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_formId == null) {
-      final args =
-          ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-      if (args != null) {
-        _formId = args['formId'] as int?;
-        _readOnly = args['readOnly'] as bool? ?? false;
-        _loadItems();
-      }
-    }
+    if (_assetsJson != null) return;
+
+    final args =
+        ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+    if (args == null) return;
+
+    final assets = args['assetsJson'];
+    final onAssetsChanged = args['onAssetsChanged'];
+    _assetsJson = assets is Map ? Map<String, dynamic>.from(assets) : null;
+    _onAssetsChanged = onAssetsChanged is Function
+        ? (onAssetsChanged as void Function(Map<String, dynamic>))
+        : null;
+
+    final obs = args['observationsJson'];
+    _observationsJson = obs is List
+        ? obs
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : null;
+
+    final onObsChanged = args['onObservationsChanged'];
+    final upstreamOnObsChanged = onObsChanged is Function
+        ? (onObsChanged as void Function(List<Map<String, dynamic>>))
+        : null;
+    _onObservationsChanged = upstreamOnObsChanged == null
+        ? null
+        : (next) {
+            _observationsJson = next;
+            upstreamOnObsChanged(next);
+          };
+
+    _readOnly = args['readOnly'] as bool? ?? false;
+    _loadItems();
   }
 
   Future<void> _loadItems() async {
-    if (_formId == null) return;
+    if (_assetsJson == null) return;
 
     setState(() => _isLoading = true);
-    final items = await DatabaseHelper.instance.getHeatGenerators(_formId!);
+    final raw = _assetsJson!['heatGenerators'];
+    final items = raw is List
+        ? raw
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : <Map<String, dynamic>>[];
 
     setState(() {
       _items = items;
@@ -75,54 +108,104 @@ class _HeatGeneratorListScreenState extends State<HeatGeneratorListScreen> {
     });
   }
 
-  void _addItem() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const AddHeatGeneratorScreen(),
-        settings: RouteSettings(arguments: {'formId': _formId}),
-      ),
-    ).then((_) => _loadItems());
+  void _emitItems(List<Map<String, dynamic>> nextItems) {
+    final assets = _assetsJson;
+    final onAssetsChanged = _onAssetsChanged;
+    if (assets == null || onAssetsChanged == null) return;
+
+    final nextAssets = Map<String, dynamic>.from(assets);
+    nextAssets['heatGenerators'] = nextItems;
+    _assetsJson = nextAssets;
+    onAssetsChanged(nextAssets);
   }
 
-  void _editItem(HeatGenerator item) {
-    Navigator.push(
+  Future<void> _addItem() async {
+    final saved = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
         builder: (context) => const AddHeatGeneratorScreen(),
         settings: RouteSettings(
-          arguments: {'formId': _formId, 'generator': item},
+          arguments: {
+            'generator': null,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': _onAssetsChanged,
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': _onObservationsChanged,
+          },
         ),
       ),
-    ).then((_) => _loadItems());
-  }
-
-  Future<void> _duplicateItem(HeatGenerator item) async {
-    final newItem = HeatGenerator(
-      formId: item.formId,
-      generatorType: item.generatorType,
-      fuelType: item.fuelType,
-      location: item.location,
-      make: item.make,
-      model: item.model,
-      serialNumber: null,
-      capacity: item.capacity,
-      ageRange: item.ageRange,
-      condition: '', // Empty string will be converted to null in add screen
-      operational: null,
-      hasIndividualMeter: null,
-      imagePaths: [],
     );
 
-    Navigator.push(
+    if (saved == null) return;
+    _upsertAndRefresh(saved);
+  }
+
+  Future<void> _editItem(Map<String, dynamic> item) async {
+    final saved = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
         builder: (context) => const AddHeatGeneratorScreen(),
         settings: RouteSettings(
-          arguments: {'formId': _formId, 'generator': newItem},
+          arguments: {
+            'generator': item,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': _onAssetsChanged,
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': _onObservationsChanged,
+          },
         ),
       ),
-    ).then((_) => _loadItems());
+    );
+
+    if (saved == null) return;
+    _upsertAndRefresh(saved);
+  }
+
+  Future<void> _duplicateItem(Map<String, dynamic> item) async {
+    final copied = Map<String, dynamic>.from(item);
+    copied.remove('id');
+    copied.remove('createdAt');
+    copied.remove('updatedAt');
+    copied['serialNumber'] = null;
+    copied['imagePaths'] = <dynamic>[];
+
+    final saved = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const AddHeatGeneratorScreen(),
+        settings: RouteSettings(
+          arguments: {
+            'generator': copied,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': _onAssetsChanged,
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': _onObservationsChanged,
+          },
+        ),
+      ),
+    );
+
+    if (saved == null) return;
+    _upsertAndRefresh(saved);
+  }
+
+  void _upsertAndRefresh(Map<String, dynamic> saved) {
+    final id = (saved['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
+
+    final nextItems = _items
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: true);
+
+    final index = nextItems.indexWhere((x) => (x['id'] ?? '').toString() == id);
+    if (index >= 0) {
+      nextItems[index] = saved;
+    } else {
+      nextItems.add(saved);
+    }
+
+    _emitItems(nextItems);
+    setState(() => _items = nextItems);
   }
 
   @override
@@ -235,26 +318,42 @@ class _HeatGeneratorListScreenState extends State<HeatGeneratorListScreen> {
                           itemCount: _items.length,
                           itemBuilder: (context, index) {
                             final item = _items[index];
-                            final title = '${item.make} ${item.model}';
-                            final subtitle =
-                                '${item.generatorType} - ${item.fuelType}';
+                            final make = (item['make'] ?? '').toString();
+                            final model = (item['model'] ?? '').toString();
+                            final location = (item['location'] ?? '')
+                                .toString();
+                            final type = (item['generatorType'] ?? '')
+                                .toString();
+                            final fuel = (item['fuelType'] ?? '').toString();
+                            final serial = item['serialNumber']?.toString();
+                            final imagePaths = (item['imagePaths'] is List)
+                                ? List<dynamic>.from(item['imagePaths'] as List)
+                                      .map((e) => e.toString())
+                                      .where((p) => p.trim().isNotEmpty)
+                                      .toList(growable: false)
+                                : <String>[];
+
+                            final title = '$make $model'.trim();
+                            final subtitle = [
+                              type,
+                              fuel,
+                            ].where((s) => s.trim().isNotEmpty).join(' - ');
 
                             final card = AppEntityCard(
                               title: title.trim().isEmpty
                                   ? 'Unknown Generator'
                                   : title,
                               subtitle: subtitle,
-                              imagePaths: item.imagePaths,
+                              imagePaths: imagePaths,
                               details: [
-                                if (item.serialNumber != null &&
-                                    item.serialNumber!.isNotEmpty)
+                                if (serial != null && serial.trim().isNotEmpty)
                                   Text(
-                                    'S/N: ${item.serialNumber}',
+                                    'S/N: $serial',
                                     style: Theme.of(
                                       context,
                                     ).textTheme.bodyMedium,
                                   ),
-                                if (item.location.isNotEmpty)
+                                if (location.trim().isNotEmpty)
                                   Row(
                                     children: [
                                       Icon(
@@ -267,7 +366,7 @@ class _HeatGeneratorListScreenState extends State<HeatGeneratorListScreen> {
                                       const SizedBox(width: 4),
                                       Expanded(
                                         child: Text(
-                                          item.location,
+                                          location,
                                           style: TextStyle(
                                             color: Theme.of(
                                               context,
@@ -331,15 +430,25 @@ class _HeatGeneratorListScreenState extends State<HeatGeneratorListScreen> {
                             if (_readOnly) return card;
 
                             return Dismissible(
-                              key: Key('heat_generator_${item.id ?? index}'),
+                              key: Key(
+                                'heat_generator_${(item['id'] ?? index).toString()}',
+                              ),
                               direction: DismissDirection.endToStart,
                               confirmDismiss: (direction) =>
                                   _confirmDeleteDialog(),
                               onDismissed: (direction) async {
-                                if (item.id != null) {
-                                  await DatabaseHelper.instance
-                                      .deleteHeatGenerator(item.id!);
-                                  _loadItems();
+                                final id = (item['id'] ?? '').toString().trim();
+                                if (id.isEmpty) return;
+                                final nextItems = _items
+                                    .map((e) => Map<String, dynamic>.from(e))
+                                    .toList(growable: true);
+                                nextItems.removeWhere(
+                                  (x) =>
+                                      (x['id'] ?? '').toString().trim() == id,
+                                );
+                                _emitItems(nextItems);
+                                if (mounted) {
+                                  setState(() => _items = nextItems);
                                 }
                               },
                               background: Container(

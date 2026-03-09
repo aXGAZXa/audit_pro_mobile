@@ -6,6 +6,8 @@ void setLocalStorage(String key, String value) {}
 
 void notifyParentComplete({required String ticket, String? returnUrl}) {}
 
+void notifyParentError({required String ticket, required String message}) {}
+
 void returnToCaller(
   String returnUrl, {
   required String ticket,

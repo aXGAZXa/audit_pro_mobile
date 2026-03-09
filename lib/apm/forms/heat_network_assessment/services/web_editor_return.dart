@@ -18,6 +18,11 @@ class WebEditorReturn {
     String? returnUrl,
   }) => impl.notifyParentComplete(ticket: ticket, returnUrl: returnUrl);
 
+  static void notifyParentError({
+    required String ticket,
+    required String message,
+  }) => impl.notifyParentError(ticket: ticket, message: message);
+
   /// Attempts to return to the caller.
   ///
   /// - If inside an iframe, prefers notifying parent (via postMessage) and

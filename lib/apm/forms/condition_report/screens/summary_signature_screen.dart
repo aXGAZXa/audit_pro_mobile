@@ -135,9 +135,11 @@ class _SummarySignatureScreenState extends State<SummarySignatureScreen> {
         return;
       }
 
-      // If the form doesn't already have a signature, try the last used signature from settings.
-      if (_auditorSignaturePath == null ||
-          !File(_auditorSignaturePath!).existsSync()) {
+      // Never auto-apply a cached signature to a form that hasn't been signed.
+      // This avoids showing "Signature Captured" before the user signs and
+      // prevents unsigned forms from passing signature validation.
+      final savedSig = (_auditorSignaturePath ?? '').trim();
+      if (savedSig.isNotEmpty && !File(savedSig).existsSync()) {
         final cached = await _readCachedAuditorSignaturePath();
         if (cached != null && File(cached).existsSync()) {
           _auditorSignaturePath = cached;

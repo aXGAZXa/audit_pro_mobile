@@ -116,6 +116,34 @@ class HeatNetworkGuidanceScreen extends StatelessWidget {
             onTap: () => onTypeSelected('Communal areas only', false),
           ),
 
+          const SizedBox(height: 16),
+
+          // Shared accommodation with no separate premises
+          _buildGuidanceCard(
+            context,
+            title: 'Shared accommodation (no separate premises)',
+            subtitle: '(Not a heat network)',
+            icon: Icons.group,
+            color: Colors.orange,
+            content: [
+              'Use this if:',
+              'The building is shared accommodation (e.g. HMO / hostel style)',
+              'There are no self-contained dwellings / separate premises',
+              'Heat/DHW may be shared, but it does not supply multiple dwellings',
+              '\nExamples:',
+              'Bedrooms with shared facilities (single set of premises)',
+              'Hostel-style accommodation without self-contained units',
+            ],
+            footer: 'This is not a heat network',
+            footerCheck: true,
+            footerText: 'Select if there are no separate dwellings/premises',
+            isNegative: true,
+            onTap: () => onTypeSelected(
+              'Shared accommodation (no separate premises)',
+              false,
+            ),
+          ),
+
           const SizedBox(height: 40),
         ],
       ),

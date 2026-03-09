@@ -7,7 +7,12 @@ class DwellingInspectionsSummaryScreen extends StatefulWidget {
   final Function(String, dynamic) onDataChanged;
   final VoidCallback onNext;
   final VoidCallback onBack;
-  final int? formId;
+  final Map<String, dynamic> assetsJson;
+  final void Function(Map<String, dynamic> nextAssets) onAssetsChanged;
+
+  final List<Map<String, dynamic>> observationsJson;
+  final void Function(List<Map<String, dynamic>> nextObservations)
+  onObservationsChanged;
 
   const DwellingInspectionsSummaryScreen({
     super.key,
@@ -15,7 +20,10 @@ class DwellingInspectionsSummaryScreen extends StatefulWidget {
     required this.onDataChanged,
     required this.onNext,
     required this.onBack,
-    this.formId,
+    required this.assetsJson,
+    required this.onAssetsChanged,
+    required this.observationsJson,
+    required this.onObservationsChanged,
   });
 
   @override
@@ -65,17 +73,18 @@ class _DwellingInspectionsSummaryScreenState
   }
 
   void _manageInspections() {
-    if (widget.formId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please save the form first')),
-      );
-      return;
-    }
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => const DwellingInspectionListScreen(),
-        settings: RouteSettings(arguments: {'formId': widget.formId}),
+        settings: RouteSettings(
+          arguments: {
+            'assetsJson': widget.assetsJson,
+            'onAssetsChanged': widget.onAssetsChanged,
+            'observationsJson': widget.observationsJson,
+            'onObservationsChanged': widget.onObservationsChanged,
+          },
+        ),
       ),
     );
   }

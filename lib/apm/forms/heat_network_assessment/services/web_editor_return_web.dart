@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_web_libraries_in_flutter
+// ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
 
 import 'dart:convert';
 import 'dart:html' as html;
@@ -38,9 +38,23 @@ void notifyParentComplete({required String ticket, String? returnUrl}) {
     final message = {
       'type': 'hna-editor-complete',
       'ticket': ticket,
-      'returnUrl': ?returnUrl,
+      'returnUrl': returnUrl,
     };
     html.window.parent!.postMessage(jsonEncode(message), '*');
+  } catch (_) {
+    // ignore
+  }
+}
+
+void notifyParentError({required String ticket, required String message}) {
+  if (!_isInIFrame()) return;
+  try {
+    final payload = {
+      'type': 'hna-editor-error',
+      'ticket': ticket,
+      'message': message,
+    };
+    html.window.parent!.postMessage(jsonEncode(payload), '*');
   } catch (_) {
     // ignore
   }

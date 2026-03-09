@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:audit_pro_mobile/apm/config/api_config.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
 import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/services/hna_submission_payload_builder.dart';
@@ -32,13 +34,25 @@ class HnaSubmissionService {
   static const String _submissionSummaryKey = 'submissionSummary';
   static const String _editSessionKey = 'editSession';
 
+  static final RegExp _guidRegex = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
   Future<Map<String, dynamic>?> _readEditSession({required int formId}) async {
     try {
       final form = await db.getForm(formId);
       if (form == null) return null;
 
-      final formData = Map<String, dynamic>.from(form['form_data'] as Map);
-      final raw = formData[_editSessionKey];
+      final root = Map<String, dynamic>.from(form['form_data'] as Map);
+
+      // Backwards/forwards compatibility:
+      // - historically some callers stored editSession at the root of form_data
+      // - newer draft docs store it under form_data.formData.editSession
+      final raw =
+          root[_editSessionKey] ??
+          ((root['formData'] is Map)
+              ? (root['formData'] as Map)[_editSessionKey]
+              : null);
       if (raw is! Map) return null;
 
       final m = Map<String, dynamic>.from(raw);
@@ -59,8 +73,15 @@ class HnaSubmissionService {
       final form = await db.getForm(formId);
       if (form == null) return fallback;
 
-      final formData = Map<String, dynamic>.from(form['form_data'] as Map);
-      final raw = formData[_submissionSummaryKey];
+      final root = Map<String, dynamic>.from(form['form_data'] as Map);
+
+      // Similar compatibility to _readEditSession():
+      // submissionSummary may be stored at root or under formData.
+      final raw =
+          root[_submissionSummaryKey] ??
+          ((root['formData'] is Map)
+              ? (root['formData'] as Map)[_submissionSummaryKey]
+              : null);
       if (raw is! Map) return fallback;
 
       final submittedAtRaw = (raw['submittedAt'] ?? '').toString().trim();
@@ -118,7 +139,9 @@ class HnaSubmissionService {
     final requestBody = {
       'assessment': payload,
       'schemaVersion': HnaSubmissionPayloadBuilder.payloadSchemaVersion,
-      'clientSubmissionId': ?clientSubmissionId,
+      ...?(clientSubmissionId == null
+          ? null
+          : {'clientSubmissionId': clientSubmissionId}),
       'appVersion': '${appVersion.name}+${appVersion.code}',
     };
 
@@ -203,7 +226,7 @@ class HnaSubmissionService {
     final form = payload['form'];
     if (form is Map) {
       final uuid = (form['uuid'] ?? '').toString().trim();
-      if (uuid.isNotEmpty) return uuid;
+      if (_looksLikeGuid(uuid)) return uuid;
     }
 
     final hna = payload['hna'];
@@ -211,11 +234,16 @@ class HnaSubmissionService {
       final summary = hna['summary'];
       if (summary is Map) {
         final uuid = (summary['formUuid'] ?? '').toString().trim();
-        if (uuid.isNotEmpty) return uuid;
+        if (_looksLikeGuid(uuid)) return uuid;
       }
     }
 
     return null;
+  }
+
+  bool _looksLikeGuid(String value) {
+    if (value.isEmpty) return false;
+    return _guidRegex.hasMatch(value);
   }
 
   Future<void> _recordSubmitAttempt({
@@ -335,9 +363,12 @@ class HnaSubmissionService {
           if (attachmentId == null || attachmentId.trim().isEmpty) return;
           if (localPath == null || localPath.trim().isEmpty) return;
 
-          final f = File(localPath);
+          final resolvedPath = await _resolveAttachmentLocalPath(localPath);
+          final f = File(resolvedPath);
           if (!await f.exists()) {
-            throw PortalApiException('Missing attachment file: $localPath');
+            throw PortalApiException(
+              'Missing attachment file: ${resolvedPath.isEmpty ? localPath : resolvedPath}',
+            );
           }
 
           final bytes = await f.length();
@@ -367,6 +398,25 @@ class HnaSubmissionService {
       'Attachments pipeline complete submissionId=$submissionId',
       category: 'HNA/Attachments',
     );
+  }
+
+  Future<String> _resolveAttachmentLocalPath(String localPath) async {
+    final trimmed = localPath.trim();
+    if (trimmed.isEmpty) return trimmed;
+
+    // Legacy payloads stored absolute paths.
+    if (p.isAbsolute(trimmed)) return trimmed;
+
+    // URLs / web blob refs should not be treated as local files.
+    if (trimmed.contains('://') || trimmed.startsWith('data:')) return trimmed;
+
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      return p.join(appDir.path, trimmed);
+    } catch (_) {
+      // Best-effort fallback.
+      return trimmed;
+    }
   }
 
   Future<Set<String>> _confirmManifest({

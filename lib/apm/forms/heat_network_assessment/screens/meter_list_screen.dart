@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+
 import '../../../database/database_helper.dart';
-import '../../../models/heat_meter.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/entity_card.dart';
 import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/screens/add_heat_meter_screen.dart';
@@ -13,16 +14,163 @@ class MeterListScreen extends StatefulWidget {
 }
 
 class _MeterListScreenState extends State<MeterListScreen> {
-  List<HeatMeter> _meters = [];
+  List<Map<String, dynamic>> _meters = [];
   int? _formId;
   String? _meterType; // 'Bulk Meter' or 'Block Level Meter'
   bool _readOnly = false;
   bool _isLoading = true;
+  bool _didInitArgs = false;
+
+  Map<String, dynamic>? _assetsJson;
+  void Function(Map<String, dynamic> nextAssets)? _onAssetsChanged;
+
+  List<Map<String, dynamic>>? _observationsJson;
+  void Function(List<Map<String, dynamic>> next)? _onObservationsChanged;
+
+  String? _relatedAssetType;
+  dynamic _relatedAssetId;
+
+  bool get _isDwellingScopedCollection {
+    final relatedType = (_relatedAssetType ?? '').toString().trim();
+    final relatedId = (_relatedAssetId ?? '').toString().trim();
+    return relatedType == 'Dwelling Inspection' && relatedId.isNotEmpty;
+  }
+
   String get _title => _readOnly
       ? 'All Heat Meters'
+      : _isDwellingScopedCollection
+      ? 'Dwelling Heat Meters'
       : (_meterType != null ? '${_meterType}s' : 'Heat Meters');
   final String _addButtonLabel = 'Add Meter';
   final String _emptyStateLabel = 'No Heat Meters';
+
+  String? _linkedDwellingLabel(Map<String, dynamic> meter) {
+    final relatedType = (meter['relatedAssetType'] ?? '').toString().trim();
+    final relatedId = (meter['relatedAssetId'] ?? '').toString().trim();
+    if (relatedType != 'Dwelling Inspection' || relatedId.isEmpty) {
+      return null;
+    }
+
+    final assets = _assetsJson;
+    if (assets == null) return 'Dwelling $relatedId';
+
+    final raw = assets['dwellingInspections'];
+    if (raw is! List) return 'Dwelling $relatedId';
+
+    for (final item in raw.whereType<Map>()) {
+      final map = Map<String, dynamic>.from(item);
+      if ((map['id'] ?? '').toString().trim() != relatedId) continue;
+      final location = (map['location'] ?? '').toString().trim();
+      if (location.isNotEmpty) return 'Dwelling $location';
+      return 'Dwelling $relatedId';
+    }
+
+    return 'Dwelling $relatedId';
+  }
+
+  List<Map<String, dynamic>> _readHeatMeters(Map<String, dynamic> assets) {
+    final raw = assets['heatMeters'];
+    if (raw is List) {
+      return raw
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: true);
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  bool _matchesType(Map<String, dynamic> m) {
+    if (_readOnly) return true;
+    if (_isDwellingScopedCollection) return true;
+    final t = (_meterType ?? '').toString();
+    if (t.isEmpty) return true;
+    final meterType = (m['meterType'] ?? m['meter_type'] ?? '').toString();
+    if (meterType == t) return true;
+    if (meterType.startsWith('$t (')) return true;
+    return false;
+  }
+
+  bool _matchesRelatedAsset(Map<String, dynamic> m) {
+    final type = (_relatedAssetType ?? '').toString().trim();
+    if (type.isEmpty) return true;
+
+    final id = _relatedAssetId;
+    if (id == null) return true;
+
+    final meterType = (m['relatedAssetType'] ?? '').toString().trim();
+    final meterId = (m['relatedAssetId'] ?? '').toString().trim();
+
+    return meterType == type && meterId == id.toString().trim();
+  }
+
+  List<Map<String, dynamic>> _filteredMeters(
+    List<Map<String, dynamic>> meters,
+  ) {
+    return meters
+        .where(_matchesRelatedAsset)
+        .where(_matchesType)
+        .toList(growable: false);
+  }
+
+  Future<void> _loadDraftIfNeeded({bool force = false}) async {
+    if (!force && _assetsJson != null) return;
+    if (_formId == null) return;
+
+    final form = await DatabaseHelper.instance.getForm(_formId!);
+    if (form == null) return;
+
+    final draft = form['form_data'];
+    if (draft is! Map) return;
+    final draftDoc = Map<String, dynamic>.from(draft);
+
+    final assets = draftDoc['assets'];
+    if (assets is Map) {
+      _assetsJson = Map<String, dynamic>.from(assets);
+    } else {
+      _assetsJson = <String, dynamic>{};
+    }
+
+    final obs = draftDoc['observations'];
+    if (obs is List) {
+      _observationsJson = obs
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: true);
+    }
+  }
+
+  Future<void> _persistAssets(Map<String, dynamic> nextAssets) async {
+    _assetsJson = Map<String, dynamic>.from(nextAssets);
+
+    final cb = _onAssetsChanged;
+    if (cb != null) {
+      cb(nextAssets);
+      return;
+    }
+
+    // Fallback: persist into the single aggregate draft doc in the forms row.
+    if (_formId == null) return;
+    final form = await DatabaseHelper.instance.getForm(_formId!);
+    if (form == null) return;
+
+    final draftRaw = form['form_data'];
+    if (draftRaw is! Map) return;
+    final draftDoc = Map<String, dynamic>.from(draftRaw);
+    draftDoc['assets'] = nextAssets;
+
+    final status = (form['status'] ?? 'draft').toString();
+    final formType = (form['form_type'] ?? 'heat_network_assessment')
+        .toString();
+    final uuid = (form['uuid'] ?? '').toString();
+
+    await DatabaseHelper.instance.saveForm(
+      id: _formId,
+      formType: formType,
+      status: status,
+      formData: jsonDecode(jsonEncode(draftDoc)) as Map<String, dynamic>,
+      uuid: uuid.isEmpty ? null : uuid,
+    );
+  }
 
   Future<bool> _confirmDeleteDialog() async {
     final confirmed = await showDialog<bool>(
@@ -52,62 +200,126 @@ class _MeterListScreenState extends State<MeterListScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_formId == null) {
+    if (!_didInitArgs) {
       final args =
           ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
       if (args != null) {
+        _didInitArgs = true;
         _formId = args['formId'] as int?;
         _meterType =
             args['networkType']
                 as String?; // Args passed as 'networkType' upstream
         _readOnly = args['readOnly'] as bool? ?? false;
+
+        _relatedAssetType = args['relatedAssetType'] as String?;
+        _relatedAssetId = args['relatedAssetId'];
+
+        final assetsArg = args['assetsJson'];
+        if (assetsArg is Map) {
+          _assetsJson = Map<String, dynamic>.from(assetsArg);
+        }
+        final cb = args['onAssetsChanged'];
+        if (cb is void Function(Map<String, dynamic>)) {
+          _onAssetsChanged = (nextAssets) {
+            _assetsJson = Map<String, dynamic>.from(nextAssets);
+            cb(nextAssets);
+          };
+        }
+
+        final obsArg = args['observationsJson'];
+        if (obsArg is List) {
+          _observationsJson = obsArg
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true);
+        }
+        final onObs = args['onObservationsChanged'];
+        if (onObs is void Function(List<Map<String, dynamic>>)) {
+          _onObservationsChanged = (next) {
+            _observationsJson = next;
+            onObs(next);
+          };
+        }
+
         _loadMeters();
       }
     }
   }
 
   Future<void> _loadMeters() async {
-    if (_formId == null) return;
-
     setState(() => _isLoading = true);
-    // Get all heat meters for this form
-    final allMeters = await DatabaseHelper.instance.getHeatMeters(_formId!);
 
-    // Filter by meter type if necessary?
-    // The previous implementation assumed "Assets" were filtered or just all assets.
-    // The requirement is to have context.
-    // However, the `heat_meters` table has `meter_type` column.
-    // So we SHOULD filter by `_meterType`.
-
-    final filteredMeters = _meterType != null && !_readOnly
-        ? allMeters.where((m) {
-            // Check for exact match OR match with brackets (e.g. "Block Level Meter (Block A)")
-            if (m.meterType == _meterType) return true;
-            if (m.meterType.startsWith('$_meterType (')) return true;
-            return false;
-          }).toList()
-        : allMeters;
+    // Always refresh from the persisted draft doc: downstream screens may have
+    // updated the single JSON blob without updating our local in-memory copy.
+    await _loadDraftIfNeeded(force: true);
+    final assets = _assetsJson ?? <String, dynamic>{};
+    final all = _readHeatMeters(assets);
+    final filtered = _filteredMeters(all);
 
     setState(() {
-      _meters = filteredMeters;
+      _meters = filtered;
       _isLoading = false;
     });
   }
 
+  void _upsertAndRefresh(Map<String, dynamic> savedMeter) {
+    final id = (savedMeter['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
+
+    final allMeters = _assetsJson != null
+        ? _readHeatMeters(_assetsJson!)
+        : _meters
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true);
+
+    final index = allMeters.indexWhere((m) => (m['id'] ?? '').toString() == id);
+    if (index >= 0) {
+      allMeters[index] = Map<String, dynamic>.from(savedMeter);
+    } else {
+      allMeters.add(Map<String, dynamic>.from(savedMeter));
+    }
+
+    final nextAssets = Map<String, dynamic>.from(
+      _assetsJson ?? <String, dynamic>{},
+    );
+    nextAssets['heatMeters'] = allMeters;
+    _assetsJson = nextAssets;
+    _onAssetsChanged?.call(nextAssets);
+
+    setState(() {
+      _meters = _filteredMeters(allMeters);
+    });
+  }
+
   void _addMeter() {
-    Navigator.push(
+    Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
         builder: (context) => const AddHeatMeterScreen(),
         settings: RouteSettings(
-          arguments: {'formId': _formId, 'meterType': _meterType},
+          arguments: {
+            'formId': _formId,
+            'meterType': _meterType,
+            'relatedAssetType': _relatedAssetType,
+            'relatedAssetId': _relatedAssetId,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': _onAssetsChanged,
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': _onObservationsChanged,
+          },
         ),
       ),
-    ).then((_) => _loadMeters());
+    ).then((saved) {
+      if (saved != null) {
+        _upsertAndRefresh(saved);
+        return;
+      }
+      _loadMeters();
+    });
   }
 
-  void _editMeter(HeatMeter meter) {
-    Navigator.push(
+  void _editMeter(Map<String, dynamic> meter) {
+    Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
         builder: (context) => const AddHeatMeterScreen(),
@@ -116,13 +328,25 @@ class _MeterListScreenState extends State<MeterListScreen> {
             'formId': _formId,
             'meter': meter,
             'meterType': _meterType,
+            'relatedAssetType': _relatedAssetType,
+            'relatedAssetId': _relatedAssetId,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': _onAssetsChanged,
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': _onObservationsChanged,
           },
         ),
       ),
-    ).then((_) => _loadMeters());
+    ).then((saved) {
+      if (saved != null) {
+        _upsertAndRefresh(saved);
+        return;
+      }
+      _loadMeters();
+    });
   }
 
-  Future<void> _duplicateMeter(HeatMeter meter) async {
+  Future<void> _duplicateMeter(Map<String, dynamic> meter) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -144,23 +368,23 @@ class _MeterListScreenState extends State<MeterListScreen> {
     );
 
     if (confirmed == true) {
-      // Create new meter object copy without ID and specific unique fields
-      final duplicatedMeter = HeatMeter(
-        formId: _formId!,
-        meterType: _meterType!,
-        make: meter.make,
-        model: meter.model,
-        location: meter.location,
-        ageRange: meter.ageRange,
-        serialNumber: null, // Clear serial
-        operational:
-            'YES', // Reset operational default? Or copy? Let's reset to force check.
-        reading: null,
-        imagePaths: [], // Do not copy images
-      );
+      final duplicatedMeter = <String, dynamic>{
+        // No id (forces new)
+        'meterType': (_meterType ?? meter['meterType'] ?? '').toString(),
+        'make': (meter['make'] ?? '').toString(),
+        'model': (meter['model'] ?? '').toString(),
+        'location': (meter['location'] ?? '').toString(),
+        'ageRange': (meter['ageRange'] ?? '').toString(),
+        'serialNumber': null,
+        'operational': 'YES',
+        'reading': null,
+        'imagePaths': <String>[],
+        'relatedAssetType': meter['relatedAssetType'],
+        'relatedAssetId': meter['relatedAssetId'],
+      };
 
       if (!mounted) return;
-      Navigator.push(
+      Navigator.push<Map<String, dynamic>>(
         context,
         MaterialPageRoute(
           builder: (context) => const AddHeatMeterScreen(),
@@ -169,10 +393,22 @@ class _MeterListScreenState extends State<MeterListScreen> {
               'formId': _formId,
               'meter': duplicatedMeter,
               'meterType': _meterType,
+              'relatedAssetType': _relatedAssetType,
+              'relatedAssetId': _relatedAssetId,
+              'assetsJson': _assetsJson,
+              'onAssetsChanged': _onAssetsChanged,
+              'observationsJson': _observationsJson,
+              'onObservationsChanged': _onObservationsChanged,
             },
           ),
         ),
-      ).then((_) => _loadMeters());
+      ).then((saved) {
+        if (saved != null) {
+          _upsertAndRefresh(saved);
+          return;
+        }
+        _loadMeters();
+      });
     }
   }
 
@@ -286,24 +522,40 @@ class _MeterListScreenState extends State<MeterListScreen> {
                           itemCount: _meters.length,
                           itemBuilder: (context, index) {
                             final meter = _meters[index];
-                            final title = '${meter.make} ${meter.model}';
+                            final make = (meter['make'] ?? '').toString();
+                            final model = (meter['model'] ?? '').toString();
+                            final title = '$make $model';
+
+                            final meterType = (meter['meterType'] ?? '')
+                                .toString();
+                            final imagePathsRaw = meter['imagePaths'];
+                            final imagePaths = imagePathsRaw is List
+                                ? imagePathsRaw
+                                      .map((e) => e.toString())
+                                      .toList()
+                                : <String>[];
+
+                            final serialNumber = (meter['serialNumber'] ?? '')
+                                .toString();
+                            final location = (meter['location'] ?? '')
+                                .toString();
+                            final linkedDwelling = _linkedDwellingLabel(meter);
 
                             final card = AppEntityCard(
                               title: title.trim().isEmpty
                                   ? 'Unknown Meter'
                                   : title,
-                              subtitle: meter.meterType,
-                              imagePaths: meter.imagePaths,
+                              subtitle: meterType,
+                              imagePaths: imagePaths,
                               details: [
-                                if (meter.serialNumber != null &&
-                                    meter.serialNumber!.isNotEmpty)
+                                if (serialNumber.isNotEmpty)
                                   Text(
-                                    'S/N: ${meter.serialNumber}',
+                                    'S/N: $serialNumber',
                                     style: Theme.of(
                                       context,
                                     ).textTheme.bodyMedium,
                                   ),
-                                if (meter.location.isNotEmpty)
+                                if (location.isNotEmpty)
                                   Row(
                                     children: [
                                       Icon(
@@ -316,7 +568,30 @@ class _MeterListScreenState extends State<MeterListScreen> {
                                       const SizedBox(width: 4),
                                       Expanded(
                                         child: Text(
-                                          meter.location,
+                                          location,
+                                          style: TextStyle(
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                if (linkedDwelling != null)
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.home_outlined,
+                                        size: 16,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.primary,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Expanded(
+                                        child: Text(
+                                          linkedDwelling,
                                           style: TextStyle(
                                             color: Theme.of(
                                               context,
@@ -346,17 +621,28 @@ class _MeterListScreenState extends State<MeterListScreen> {
                             if (_readOnly) return card;
 
                             return Dismissible(
-                              key: Key('heat_meter_${meter.id ?? index}'),
+                              key: Key(
+                                'heat_meter_${(meter['id'] ?? index).toString()}',
+                              ),
                               direction: DismissDirection.endToStart,
                               confirmDismiss: (direction) =>
                                   _confirmDeleteDialog(),
                               onDismissed: (direction) async {
-                                if (meter.id != null) {
-                                  await DatabaseHelper.instance.deleteHeatMeter(
-                                    meter.id!,
-                                  );
-                                  _loadMeters();
-                                }
+                                final current = _assetsJson;
+                                if (current == null) return;
+
+                                final id = (meter['id'] ?? '').toString();
+                                if (id.isEmpty) return;
+                                final nextAssets = Map<String, dynamic>.from(
+                                  current,
+                                );
+                                final list = _readHeatMeters(nextAssets);
+                                list.removeWhere(
+                                  (m) => (m['id'] ?? '').toString() == id,
+                                );
+                                nextAssets['heatMeters'] = list;
+                                await _persistAssets(nextAssets);
+                                _loadMeters();
                               },
                               background: Container(
                                 margin: const EdgeInsets.only(bottom: 12),

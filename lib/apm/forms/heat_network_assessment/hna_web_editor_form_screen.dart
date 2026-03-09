@@ -15,9 +15,13 @@ import 'screens/metering_details_screen.dart';
 import 'services/hna_derived_metrics_calculator.dart';
 import 'services/hna_pdf_derived_calculator.dart';
 import 'services/hna_pdf_model_builder.dart';
+import 'services/hna_submission_payload_builder.dart';
+import 'services/hna_web_editor_attachment_context.dart';
 import 'services/hna_web_editor_service.dart';
 import 'services/web_editor_return.dart';
 import 'hna_web_editor_complete_screen.dart';
+
+import 'package:uuid/uuid.dart';
 
 class HnaWebEditorFormScreen extends StatefulWidget {
   const HnaWebEditorFormScreen({
@@ -67,15 +71,97 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
   int _currentPage = 0;
   bool _saving = false;
   bool _dirty = false;
+  bool _needsSchemaUpgrade = false;
+  bool _needsDerivedMetricsUpgrade = false;
   String? _lastSavedPayloadJson;
 
   late final Map<String, dynamic> _formData = Map<String, dynamic>.from(
     widget.initialFormData,
   );
 
+  late final Map<String, dynamic> _assetsJson = _cloneAssetsFromPayload();
+  late final Map<String, dynamic> _unsafeJson = _cloneUnsafeFromPayload();
+  late List<Map<String, dynamic>> _observationsJson =
+      _cloneObservationsFromPayload();
+
+  Map<String, dynamic> _cloneAssetsFromPayload() {
+    final rawHna = widget.originalPayload['hna'];
+    if (rawHna is! Map) return <String, dynamic>{};
+    final hna = Map<String, dynamic>.from(rawHna);
+    final rawAssets = hna['assets'];
+    if (rawAssets is Map) {
+      return Map<String, dynamic>.from(rawAssets);
+    }
+    return <String, dynamic>{};
+  }
+
+  Map<String, dynamic> _cloneUnsafeFromPayload() {
+    final rawHna = widget.originalPayload['hna'];
+    if (rawHna is! Map) return <String, dynamic>{};
+    final hna = Map<String, dynamic>.from(rawHna);
+    final rawUnsafe = hna['unsafe'];
+    if (rawUnsafe is Map) {
+      final out = Map<String, dynamic>.from(rawUnsafe);
+      out['unsafeObservations'] = out['unsafeObservations'] is List
+          ? out['unsafeObservations']
+          : [];
+      out['unsafeReports'] = out['unsafeReports'] is List
+          ? out['unsafeReports']
+          : [];
+      out['unreportedUnsafeObservations'] =
+          out['unreportedUnsafeObservations'] is List
+          ? out['unreportedUnsafeObservations']
+          : [];
+      return out;
+    }
+    return <String, dynamic>{
+      'unsafeObservations': <dynamic>[],
+      'unsafeReports': <dynamic>[],
+      'unreportedUnsafeObservations': <dynamic>[],
+    };
+  }
+
+  List<Map<String, dynamic>> _cloneObservationsFromPayload() {
+    final rawHna = widget.originalPayload['hna'];
+    if (rawHna is! Map) return <Map<String, dynamic>>[];
+    final hna = Map<String, dynamic>.from(rawHna);
+    final rawObservations = hna['observations'];
+    if (rawObservations is List) {
+      return rawObservations
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: true);
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  void _updateObservations(List<Map<String, dynamic>> nextObservations) {
+    setState(() {
+      _observationsJson = nextObservations
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: true);
+      _dirty = true;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    _needsSchemaUpgrade =
+        (widget.schemaVersion ?? 0) <
+        HnaSubmissionPayloadBuilder.payloadSchemaVersion;
+
+    final existingDerived = widget.initialFormData['derivedMetrics'];
+    final existingDerivedSchemaRaw = existingDerived is Map
+        ? existingDerived['schemaVersion']
+        : null;
+    final existingDerivedSchema = existingDerivedSchemaRaw is int
+        ? existingDerivedSchemaRaw
+        : int.tryParse((existingDerivedSchemaRaw ?? '').toString());
+    _needsDerivedMetricsUpgrade =
+        (existingDerivedSchema ?? 0) <
+        HnaDerivedMetricsCalculator.schemaVersion;
+
     // Treat the initial payload as already-saved so users can navigate without
     // forcing an immediate PUT when nothing has changed.
     _lastSavedPayloadJson = jsonEncode(
@@ -113,21 +199,52 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
   void _updateFormData(String key, dynamic value) {
     final existing = _formData[key];
     if (_valuesEqual(existing, value)) return;
-
     setState(() {
       _formData[key] = value;
       _dirty = true;
     });
   }
 
-  Future<bool> _saveIfDirty({required bool showSuccessToast}) async {
-    if (_saving) return false;
-    if (!_dirty) return true;
+  void _updateAssets(Map<String, dynamic> nextAssets) {
+    setState(() {
+      _assetsJson
+        ..clear()
+        ..addAll(nextAssets);
+      _dirty = true;
+    });
+  }
 
-    final updatedPayload = _buildUpdatedPayload(recomputeDerivedMetrics: true);
+  void _updateUnsafe(Map<String, dynamic> nextUnsafe) {
+    setState(() {
+      _unsafeJson
+        ..clear()
+        ..addAll(nextUnsafe);
+      _dirty = true;
+    });
+  }
+
+  Future<bool> _saveIfDirty({
+    required bool showSuccessToast,
+    bool generatePdf = false,
+    bool forceRecompute = false,
+  }) async {
+    if (_saving) return false;
+    final shouldRecompute =
+        forceRecompute ||
+        _dirty ||
+        _needsSchemaUpgrade ||
+        _needsDerivedMetricsUpgrade;
+
+    if (!shouldRecompute && !generatePdf) {
+      return true;
+    }
+
+    final updatedPayload = _buildUpdatedPayload(
+      recomputeDerivedMetrics: shouldRecompute,
+    );
     final payloadJson = jsonEncode(_makeJsonEncodable(updatedPayload));
 
-    if (_lastSavedPayloadJson == payloadJson) {
+    if (!shouldRecompute && _lastSavedPayloadJson == payloadJson) {
       setState(() => _dirty = false);
       return true;
     }
@@ -138,11 +255,19 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
       await widget.service.updateSubmission(
         ticket: widget.ticket,
         payloadJson: payloadJson,
+        generatePdf: generatePdf,
       );
+
+      // Attachments are add-only; committing just clears local pending state.
+      HnaWebEditorAttachmentContext.instance.commitPending();
 
       if (!mounted) return false;
       _lastSavedPayloadJson = payloadJson;
-      setState(() => _dirty = false);
+      setState(() {
+        _dirty = false;
+        _needsSchemaUpgrade = false;
+        _needsDerivedMetricsUpgrade = false;
+      });
 
       if (showSuccessToast) {
         ScaffoldMessenger.of(
@@ -163,7 +288,7 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
   }
 
   void _autoSaveAndThen(VoidCallback navigate) {
-    _saveIfDirty(showSuccessToast: false).then((ok) {
+    _saveIfDirty(showSuccessToast: false, generatePdf: kIsWeb).then((ok) {
       if (!mounted) return;
       if (!ok) return;
       navigate();
@@ -183,20 +308,12 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
   }
 
   bool _shouldShowUnsafeSituations() {
-    // In the mobile app this screen is backed by local SQLite (via formId).
-    // In the web editor we only want to show it if the payload already contains
-    // unsafe items explicitly.
-    const possibleKeys = <String>[
-      'unsafeSituations',
-      'unsafeObservations',
-      'unsafe',
-    ];
-
-    for (final key in possibleKeys) {
-      final value = _formData[key];
-      if (value is List && value.isNotEmpty) return true;
-    }
-
+    final unsafeObs = _unsafeJson['unsafeObservations'];
+    if (unsafeObs is List && unsafeObs.isNotEmpty) return true;
+    final unsafeReports = _unsafeJson['unsafeReports'];
+    if (unsafeReports is List && unsafeReports.isNotEmpty) return true;
+    final unreported = _unsafeJson['unreportedUnsafeObservations'];
+    if (unreported is List && unreported.isNotEmpty) return true;
     return false;
   }
 
@@ -228,6 +345,10 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
           onNext: () => _autoSaveAndThen(_nextPage),
           onBack: () => _autoSaveAndThen(_previousPage),
           formId: null,
+          assetsJson: _assetsJson,
+          onAssetsChanged: _updateAssets,
+          observationsJson: _observationsJson,
+          onObservationsChanged: _updateObservations,
         ),
       if (shouldShowGenerators)
         HeatGeneratorsScreen(
@@ -236,20 +357,28 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
           onNext: () => _autoSaveAndThen(_nextPage),
           onBack: () => _autoSaveAndThen(_previousPage),
           formId: null,
+          assetsJson: _assetsJson,
+          onAssetsChanged: _updateAssets,
+          observationsJson: _observationsJson,
+          onObservationsChanged: _updateObservations,
         ),
       DwellingInspectionsSummaryScreen(
         formData: _formData,
         onDataChanged: _updateFormData,
         onNext: () => _autoSaveAndThen(_nextPage),
         onBack: () => _autoSaveAndThen(_previousPage),
-        formId: null,
+        assetsJson: _assetsJson,
+        onAssetsChanged: _updateAssets,
+        observationsJson: _observationsJson,
+        onObservationsChanged: _updateObservations,
       ),
       if (shouldShowUnsafe)
         HNAUnsafeSituationsScreen(
           formData: _formData,
+          unsafeJson: _unsafeJson,
+          onUnsafeChanged: _updateUnsafe,
           onNext: () => _autoSaveAndThen(_nextPage),
           onBack: () => _autoSaveAndThen(_previousPage),
-          formId: null,
         ),
       AssessmentSummaryScreen(
         formData: _formData,
@@ -306,6 +435,31 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
 
     final formDataOut = Map<String, dynamic>.from(_formData);
 
+    // Persist any asset edits made in the web editor (meters, etc.).
+    hna['assets'] = Map<String, dynamic>.from(_assetsJson);
+    hna['unsafe'] = Map<String, dynamic>.from(_unsafeJson);
+    hna['observations'] = _observationsJson
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: false);
+
+    final rawForm = out['form'];
+    final form = rawForm is Map ? Map<String, dynamic>.from(rawForm) : null;
+    final formId = form == null
+        ? 0
+        : int.tryParse((form['id'] ?? '0').toString()) ?? 0;
+
+    hna['attachments'] = HnaWebEditorAttachmentContext.instance.buildManifest(
+      formId: formId,
+      formData: formDataOut,
+      assetsJson: Map<String, dynamic>.from(_assetsJson),
+      observationsJson: _observationsJson
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: false),
+      unsafeJson: Map<String, dynamic>.from(_unsafeJson),
+    );
+
+    _ensureV4Envelope(out: out, hna: hna, formData: formDataOut);
+
     if (recomputeDerivedMetrics) {
       final assets = hna['assets'];
       final observations = hna['observations'];
@@ -345,6 +499,9 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
         formDataOut['pdfDerived'] = HnaPdfDerivedCalculator.computeFromPayload(
           formData: formDataOut,
           assetsJson: Map<String, dynamic>.from(assets),
+          observationsJson: observations is List
+              ? List<dynamic>.from(observations)
+              : null,
           methodologyVersion: pdfMethodologyVersion,
         );
       }
@@ -365,6 +522,7 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
           unsafe is Map ? unsafe['unsafeReports'] : null,
         );
         final attachmentsJson = _tryReadMapList(attachments);
+        final observationsJson = _tryReadMapList(observations);
 
         if (assetsMap != null) {
           hna['pdfModel'] = HnaPdfModelBuilder.build(
@@ -372,6 +530,7 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
             reportNumber: reportNumber,
             formData: formDataOut,
             assetsJson: assetsMap,
+            observationsJson: observationsJson,
             unsafeObservationsJson: unsafeObservationsJson,
             unsafeReportsJson: unsafeReportsJson,
             attachments: attachmentsJson,
@@ -384,6 +543,59 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
     out['hna'] = hna;
 
     return out;
+  }
+
+  void _ensureV4Envelope({
+    required Map<String, dynamic> out,
+    required Map<String, dynamic> hna,
+    required Map<String, dynamic> formData,
+  }) {
+    // Always emit the latest payload schema from the web editor.
+    out['payloadSchemaVersion'] =
+        HnaSubmissionPayloadBuilder.payloadSchemaVersion;
+
+    final rawForm = out['form'];
+    final form = rawForm is Map
+        ? Map<String, dynamic>.from(rawForm)
+        : <String, dynamic>{};
+
+    final rawSummary = hna['summary'];
+    final summary = rawSummary is Map
+        ? Map<String, dynamic>.from(rawSummary)
+        : <String, dynamic>{};
+
+    var formUuid = (form['uuid'] ?? '').toString().trim();
+    if (formUuid.isEmpty) {
+      final fromSummary = (summary['formUuid'] ?? '').toString().trim();
+      formUuid = fromSummary.isNotEmpty ? fromSummary : const Uuid().v4();
+      form['uuid'] = formUuid;
+    }
+
+    final submittedAt = (widget.submittedAtUtc ?? DateTime.now()).toUtc();
+    final existingFriendlyRef = (summary['friendlyRef'] ?? '')
+        .toString()
+        .trim();
+    final friendlyRef = existingFriendlyRef.isNotEmpty
+        ? existingFriendlyRef
+        : HnaSubmissionPayloadBuilder.buildFriendlyRef(
+            submittedAt: submittedAt,
+            formUuid: formUuid,
+          );
+
+    // Keep summary aligned with edited formData so downstream reporting has
+    // consistent scalar fields.
+    summary['assessorName'] =
+        (formData['auditorName'] ?? formData['assessorName'] ?? '').toString();
+    summary['clientName'] = (formData['client'] ?? '').toString();
+    summary['auditDate'] = (formData['auditDate'] ?? '').toString();
+    summary['submittedAt'] =
+        (summary['submittedAt'] ?? submittedAt.toIso8601String()).toString();
+    summary['friendlyRef'] = friendlyRef;
+    summary['formUuid'] = formUuid;
+    summary['formId'] = form['id'] ?? summary['formId'] ?? 0;
+
+    hna['summary'] = summary;
+    out['form'] = form;
   }
 
   String? _tryReadReportNumber({
@@ -417,7 +629,11 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
   }
 
   Future<void> _saveAndExit() async {
-    final ok = await _saveIfDirty(showSuccessToast: true);
+    final ok = await _saveIfDirty(
+      showSuccessToast: true,
+      generatePdf: kIsWeb,
+      forceRecompute: true,
+    );
     if (!ok) return;
     if (!mounted) return;
 

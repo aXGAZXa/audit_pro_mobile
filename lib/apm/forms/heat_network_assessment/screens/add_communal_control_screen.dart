@@ -1,12 +1,12 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import '../../../database/database_helper.dart';
-import '../../../models/communal_control.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
+import 'package:uuid/uuid.dart';
+import '../../../services/platform/image_persistence.dart';
+
+import 'hna_observations_list_screen.dart';
 
 class AddCommunalControlScreen extends StatefulWidget {
   const AddCommunalControlScreen({super.key});
@@ -30,8 +30,13 @@ class _AddCommunalControlScreenState extends State<AddCommunalControlScreen> {
   // Special controllers for "Other" values
   final _otherTypeController = TextEditingController();
 
-  int? _formId;
-  CommunalControl? _existingItem;
+  Map<String, dynamic>? _assetsJson;
+  void Function(Map<String, dynamic> nextAssets)? _onAssetsChanged;
+  List<Map<String, dynamic>>? _observationsJson;
+  void Function(List<Map<String, dynamic>> nextObservations)?
+  _onObservationsChanged;
+
+  Map<String, dynamic>? _existingItem;
   String? _condition;
   String? _operational; // Yes/No
 
@@ -57,87 +62,138 @@ class _AddCommunalControlScreenState extends State<AddCommunalControlScreen> {
     super.didChangeDependencies();
     final args =
         ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    if (args != null && _formId == null) {
-      _formId = args['formId'] as int?;
+    if (args == null || _assetsJson != null) return;
 
-      final rawItem = args['control'];
-      if (rawItem is CommunalControl) {
-        _existingItem = rawItem;
-        _loadExistingData();
-      }
+    final assets = args['assetsJson'];
+    final onAssetsChanged = args['onAssetsChanged'];
+    _assetsJson = assets is Map ? Map<String, dynamic>.from(assets) : null;
+    _onAssetsChanged = onAssetsChanged is Function
+        ? (onAssetsChanged as void Function(Map<String, dynamic>))
+        : null;
+
+    final obs = args['observationsJson'];
+    _observationsJson = obs is List
+        ? obs
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : null;
+
+    final onObsChanged = args['onObservationsChanged'];
+    _onObservationsChanged = onObsChanged is Function
+        ? (onObsChanged as void Function(List<Map<String, dynamic>>))
+        : null;
+
+    final rawItem = args['control'];
+    if (rawItem is Map) {
+      _existingItem = Map<String, dynamic>.from(rawItem);
+      _loadExistingData();
     }
   }
 
   void _loadExistingData() {
     if (_existingItem == null) return;
 
-    _makeController.text = _existingItem!.make ?? '';
-    _modelController.text = _existingItem!.model ?? '';
-    _locationController.text = _existingItem!.location ?? '';
-    _serialNumberController.text = _existingItem!.serialNumber ?? '';
-    _condition = _existingItem!.condition;
-    _operational = _existingItem!.operational == 'Unknown'
+    final item = _existingItem!;
+
+    _makeController.text = (item['make'] ?? '').toString();
+    _modelController.text = (item['model'] ?? '').toString();
+    _locationController.text = (item['location'] ?? '').toString();
+    _serialNumberController.text = (item['serialNumber'] ?? '').toString();
+    _condition = (item['condition'] ?? '').toString().trim().isEmpty
         ? null
-        : _existingItem!.operational;
+        : (item['condition'] ?? '').toString();
+    final operational = (item['operational'] ?? '').toString();
+    _operational = operational.trim().isEmpty || operational == 'Unknown'
+        ? null
+        : operational;
 
     // Handle Type logic
-    if (_controlTypes.contains(_existingItem!.controlType)) {
-      _selectedType = _existingItem!.controlType;
+    final controlType = (item['controlType'] ?? '').toString();
+    if (_controlTypes.contains(controlType)) {
+      _selectedType = controlType;
       _isOtherType = _selectedType == 'Other';
     } else {
       _selectedType = 'Other';
       _isOtherType = true;
-      _otherTypeController.text = _existingItem!.controlType;
+      _otherTypeController.text = controlType;
     }
 
-    if (_existingItem!.imagePaths.isNotEmpty) {
-      _images = _existingItem!.imagePaths.map((path) => XFile(path)).toList();
+    final imagePathsRaw = item['imagePaths'];
+    final imagePaths = imagePathsRaw is List
+        ? imagePathsRaw
+              .map((e) => e.toString())
+              .where((e) => e.trim().isNotEmpty)
+              .toList(growable: false)
+        : <String>[];
+    if (imagePaths.isNotEmpty) {
+      _images = imagePaths.map((path) => XFile(path)).toList();
     }
-    _loadObservationCount();
+
+    _checkObservationCount();
   }
 
-  Future<void> _loadObservationCount() async {
-    if (_existingItem == null || _existingItem!.id == null) return;
+  void _checkObservationCount() {
+    final all = _observationsJson;
+    final id = (_existingItem?['id'] ?? '').toString().trim();
+    if (all == null || id.isEmpty) {
+      if (!mounted) return;
+      setState(() => _observationCount = 0);
+      return;
+    }
 
-    final id = _existingItem!.id!;
-    final db = DatabaseHelper.instance;
-    final observations = await db.getQuestionObservations(_formId!, 'ctrl_$id');
+    final ref = 'ctrl_$id';
+    final count = all.where((o) {
+      final oRef = (o['questionReference'] ?? o['question_reference'] ?? '')
+          .toString()
+          .trim();
+      return oRef == ref;
+    }).length;
 
-    setState(() {
-      _observationCount = observations.length;
-    });
+    if (!mounted) return;
+    setState(() => _observationCount = count);
   }
 
   Future<void> _viewObservations() async {
-    // If no ID exists, try to save first
-    if (_existingItem == null || _existingItem!.id == null) {
-      final success = await _saveInternal();
+    final obs = _observationsJson;
+    final onObsChanged = _onObservationsChanged;
+    if (obs == null || onObsChanged == null) return;
+
+    // If no ID exists, try to save first.
+    if (_existingItem == null ||
+        (_existingItem!['id'] ?? '').toString().isEmpty) {
+      final success = await _saveInternal(requireImage: false);
       if (!success) return;
     }
 
     if (!mounted) return;
 
-    if (_existingItem?.id == null) return;
+    final id = (_existingItem?['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
 
-    final id = _existingItem!.id!;
     final ref = 'ctrl_$id';
     final makeModel = '${_makeController.text} ${_modelController.text}'.trim();
 
-    await Navigator.pushNamed(
+    await Navigator.push(
       context,
-      '/observations-list',
-      arguments: {
-        'formId': _formId,
-        'questionReference': ref,
-        'questionText':
-            '${_getFinalType()}${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
-        'sectionName': 'Communal Controls',
-        'assetId': id,
-        'assetType': 'Communal Control',
-        'assetMakeModel': makeModel.isEmpty ? null : makeModel,
-      },
+      MaterialPageRoute(
+        builder: (context) => HnaObservationsListScreen(
+          observationsJson: obs,
+          onObservationsChanged: (next) {
+            _observationsJson = next;
+            onObsChanged(next);
+          },
+          questionReference: ref,
+          questionText:
+              '${_getFinalType()}${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
+          sectionName: 'Communal Controls',
+          assetId: id,
+          assetType: 'Communal Control',
+          assetMakeModel: makeModel.isEmpty ? null : makeModel,
+        ),
+      ),
     );
-    _loadObservationCount();
+    _checkObservationCount();
   }
 
   String _getFinalType() {
@@ -152,11 +208,15 @@ class _AddCommunalControlScreenState extends State<AddCommunalControlScreen> {
   Future<void> _saveAndClose() async {
     final success = await _saveInternal();
     if (success && mounted) {
-      Navigator.pop(context);
+      Navigator.pop(context, _existingItem);
     }
   }
 
-  Future<bool> _saveInternal() async {
+  Future<bool> _saveInternal({bool requireImage = true}) async {
+    final assets = _assetsJson;
+    final onAssetsChanged = _onAssetsChanged;
+    if (assets == null || onAssetsChanged == null) return false;
+
     if (_selectedType == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select a control type')),
@@ -166,7 +226,7 @@ class _AddCommunalControlScreenState extends State<AddCommunalControlScreen> {
 
     if (!_formKey.currentState!.validate()) return false;
 
-    if (_images.isEmpty) {
+    if (requireImage && _images.isEmpty) {
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -190,21 +250,7 @@ class _AddCommunalControlScreenState extends State<AddCommunalControlScreen> {
       await _modelFieldKey.currentState?.saveSuggestion();
       await _locationFieldKey.currentState?.saveSuggestion();
 
-      final List<String> imagePaths = [];
-      final appDir = await getApplicationDocumentsDirectory();
-
-      for (final image in _images) {
-        final path = image.path;
-        if (path.startsWith(appDir.path)) {
-          imagePaths.add(path);
-        } else {
-          final fileName =
-              'ctrl_${DateTime.now().millisecondsSinceEpoch}_${imagePaths.length}.jpg';
-          final savedImage = File('${appDir.path}/$fileName');
-          await File(path).copy(savedImage.path);
-          imagePaths.add(savedImage.path);
-        }
-      }
+      final imagePaths = await persistPickedImagePaths(_images, prefix: 'cc');
 
       String toCamelCase(String text) {
         if (text.isEmpty) return text;
@@ -217,41 +263,53 @@ class _AddCommunalControlScreenState extends State<AddCommunalControlScreen> {
             .join(' ');
       }
 
-      final item = CommunalControl(
-        id: _existingItem?.id,
-        formId: _formId!,
-        controlType: _getFinalType(),
-        location: toCamelCase(_locationController.text.trim()),
-        make: toCamelCase(_makeController.text.trim()),
-        model: _modelController.text.trim(),
-        serialNumber: _serialNumberController.text.trim().isEmpty
+      final existingId = (_existingItem?['id'] ?? '').toString().trim();
+      final id = existingId.isNotEmpty ? existingId : const Uuid().v4();
+      final now = DateTime.now().toUtc().toIso8601String();
+
+      final item = <String, dynamic>{
+        'id': id,
+        'controlType': _getFinalType(),
+        'location': toCamelCase(_locationController.text.trim()),
+        'make': toCamelCase(_makeController.text.trim()),
+        'model': _modelController.text.trim(),
+        'serialNumber': _serialNumberController.text.trim().isEmpty
             ? null
             : _serialNumberController.text.trim(),
-        condition: _condition,
-        operational: _operational,
-        imagePaths: imagePaths,
-        createdAt: _existingItem?.createdAt,
-        updatedAt: DateTime.now(),
-      );
+        'condition': _condition,
+        'operational': _operational,
+        'imagePaths': imagePaths,
+        'updatedAt': now,
+        'createdAt': (_existingItem?['createdAt'] ?? now),
+      };
 
-      final savedId = await DatabaseHelper.instance.saveCommunalControl(item);
+      final rawList = assets['communalControls'];
+      final list = rawList is List
+          ? rawList
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList(growable: true)
+          : <Map<String, dynamic>>[];
 
-      // Update the existing item with the new ID and data
+      final idx = list.indexWhere((x) => (x['id'] ?? '').toString() == id);
+      if (idx >= 0) {
+        list[idx] = item;
+      } else {
+        list.add(item);
+      }
+
+      final nextAssets = Map<String, dynamic>.from(assets);
+      nextAssets['communalControls'] = list;
+      onAssetsChanged(nextAssets);
+      _assetsJson = nextAssets;
+
+      if (!mounted) return true;
       setState(() {
-        _existingItem = CommunalControl(
-          id: savedId,
-          formId: item.formId,
-          controlType: item.controlType,
-          location: item.location,
-          make: item.make,
-          model: item.model,
-          serialNumber: item.serialNumber,
-          condition: item.condition,
-          operational: item.operational,
-          imagePaths: item.imagePaths,
-        );
+        _existingItem = item;
         _isLoading = false;
       });
+
+      _checkObservationCount();
 
       return true;
     } catch (e) {
@@ -275,7 +333,7 @@ class _AddCommunalControlScreenState extends State<AddCommunalControlScreen> {
           Expanded(
             child: Form(
               key: _formKey,
-                child: ListView(
+              child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
                   Text(
@@ -433,7 +491,9 @@ class _AddCommunalControlScreenState extends State<AddCommunalControlScreen> {
                   ElevatedButton.icon(
                     onPressed: _viewObservations,
                     icon: Icon(
-                      _observationCount > 0 ? Icons.list_alt : Icons.add_comment,
+                      _observationCount > 0
+                          ? Icons.list_alt
+                          : Icons.add_comment,
                       size: 20,
                     ),
                     label: Text(

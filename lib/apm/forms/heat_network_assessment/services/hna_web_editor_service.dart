@@ -1,5 +1,8 @@
 import 'dart:convert';
 
+import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+
 import '../../../services/portal_api_client.dart';
 
 class HnaWebEditorService {
@@ -8,6 +11,22 @@ class HnaWebEditorService {
   final PortalApiClient apiClient;
 
   static const String ticketHeader = 'X-GTAPP-EDITOR-TICKET';
+
+  Uri _uri(String path) {
+    final trimmedBase = apiClient.baseUrl.trim();
+    if (trimmedBase.isEmpty) {
+      throw PortalApiException(
+        'PORTAL_BASE_URL is not configured. Provide --dart-define=PORTAL_BASE_URL=https://...'
+        ' when running/building the app.',
+      );
+    }
+
+    final base = trimmedBase.endsWith('/')
+        ? trimmedBase.substring(0, trimmedBase.length - 1)
+        : trimmedBase;
+    final normalizedPath = path.startsWith('/') ? path : '/$path';
+    return Uri.parse('$base$normalizedPath');
+  }
 
   Future<Map<String, dynamic>> getSession({required String ticket}) async {
     final json = await apiClient.getJson(
@@ -44,6 +63,7 @@ class HnaWebEditorService {
   Future<void> updateSubmission({
     required String ticket,
     required String payloadJson,
+    bool generatePdf = true,
   }) async {
     // Client-side sanity check so we can give a clean error message.
     try {
@@ -55,7 +75,7 @@ class HnaWebEditorService {
     final json = await apiClient.putJson(
       '/api/editor/hna/submission',
       headers: {ticketHeader: ticket},
-      body: {'payloadJson': payloadJson},
+      body: {'payloadJson': payloadJson, 'generatePdf': generatePdf},
     );
 
     if (!PortalApiClient.readResultSuccess(json)) {
@@ -88,5 +108,64 @@ class HnaWebEditorService {
     }
 
     return out.toSet().toList()..sort();
+  }
+
+  Future<List<int>> getAttachmentBytes({
+    required String ticket,
+    required String attachmentId,
+  }) async {
+    return apiClient.getBytes(
+      '/api/editor/hna/attachments/$attachmentId/content',
+      headers: {ticketHeader: ticket},
+    );
+  }
+
+  Future<Map<String, dynamic>> uploadAttachment({
+    required String ticket,
+    required String attachmentId,
+    required List<int> bytes,
+    required String fileName,
+    required String contentType,
+  }) async {
+    final uri = _uri('/api/editor/hna/attachments/$attachmentId/upload');
+
+    final request = http.MultipartRequest('POST', uri);
+    request.headers[ticketHeader] = ticket;
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'file',
+        bytes,
+        filename: fileName,
+        contentType: MediaType.parse(contentType),
+      ),
+    );
+
+    final streamed = await apiClient.httpClient.send(request);
+    final response = await http.Response.fromStream(streamed);
+
+    Map<String, dynamic> json;
+    try {
+      final decoded = jsonDecode(response.body);
+      json = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+    } catch (_) {
+      json = <String, dynamic>{};
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final message =
+          PortalApiClient.readResultMessage(json) ??
+          response.reasonPhrase ??
+          'Upload failed';
+      throw PortalApiException(message, statusCode: response.statusCode);
+    }
+
+    if (!PortalApiClient.readResultSuccess(json)) {
+      throw PortalApiException(
+        PortalApiClient.readResultMessage(json) ?? 'Upload failed',
+        statusCode: response.statusCode,
+      );
+    }
+
+    return json;
   }
 }

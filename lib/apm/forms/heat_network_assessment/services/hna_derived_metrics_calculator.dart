@@ -1,126 +1,10 @@
-import 'package:audit_pro_mobile/apm/database/database_helper.dart';
-import 'package:audit_pro_mobile/apm/models/dwelling_inspection.dart';
-import 'package:audit_pro_mobile/apm/models/heat_meter.dart';
-
 class HnaDerivedMetricsCalculator {
-  static const int schemaVersion = 1;
-
-  static Map<String, dynamic> _computeCore({
-    required Map<String, dynamic> formData,
-    required Map<String, int> meterCountsByType,
-    required int generatorCount,
-    required Map<String, int> generatorTypeCounts,
-    required Map<String, int> fuelTypeCounts,
-    required int phexCount,
-    required int dhwPlantCount,
-    required int communalControlCount,
-    required int dwellingInspectionCount,
-    required Map<String, dynamic> subMeteringCounts,
-    required int observationCount,
-    required int unsafeObservationCount,
-    required int unsafeReportCount,
-    required int unsafeUnreportedCount,
-    required String methodologyVersion,
-  }) {
-    final networkTypeRaw = formData['meetsHeatNetworkDefinition'];
-    final networkType = _normalizeNetworkType(networkTypeRaw);
-
-    final isHeatNetwork =
-        networkType == 'district' || networkType == 'communal';
-    final suppliesDwellings = networkType != 'communal_areas_only';
-
-    final numBlocks = _toInt(formData['numBlocks']);
-    final maxFloors = _toInt(formData['maxFloors']);
-    final numDwellings = _toInt(formData['numDwellings']);
-
-    final hasBulkMeter = _toNullableBool(formData['hasBulkMeter']);
-    final hasBlockMeters = _toNullableBool(formData['hasBlockMeters']);
-
-    final meteringLevel = _computeMeteringLevel(
-      meterCountsByType: meterCountsByType,
-      hasBulkMeter: hasBulkMeter,
-      hasBlockMeters: hasBlockMeters,
-    );
-
-    final billingImplicationFlag = _computeBillingImplicationFlag(
-      isHeatNetwork: isHeatNetwork,
-      hasAnyMeters: meterCountsByType.isNotEmpty,
-      hasBulkMeter: hasBulkMeter,
-      hasBlockMeters: hasBlockMeters,
-    );
-
-    final dataQualityFlags = <String>[];
-    if (hasBulkMeter == true && meterCountsByType.isEmpty) {
-      dataQualityFlags.add('HAS_BULK_METER_YES_BUT_NO_METER_ASSETS');
-    }
-    if (hasBlockMeters == true && meterCountsByType.isEmpty) {
-      dataQualityFlags.add('HAS_BLOCK_METERS_YES_BUT_NO_METER_ASSETS');
-    }
-
-    final hasBlockingUnsafeItems = unsafeUnreportedCount > 0;
-
-    final reportingTags = _computeReportingTags(
-      isHeatNetwork: isHeatNetwork,
-      meteringLevel: meteringLevel,
-      billingImplicationFlag: billingImplicationFlag,
-      hasBlockingUnsafeItems: hasBlockingUnsafeItems,
-      dwellingInspectionCount: dwellingInspectionCount,
-    );
-
-    return {
-      'schemaVersion': schemaVersion,
-      'methodologyVersion': methodologyVersion,
-      'computedAt': DateTime.now().toIso8601String(),
-
-      // Classification
-      'networkType': networkType,
-      'networkTypeRaw': networkTypeRaw,
-      'isHeatNetwork': isHeatNetwork,
-      'suppliesDwellings': suppliesDwellings,
-
-      // Scale / context
-      'numBlocks': numBlocks,
-      'maxFloors': maxFloors,
-      'numDwellings': numDwellings,
-
-      // Metering topology
-      'hasBulkMeter': hasBulkMeter,
-      'hasBlockMeters': hasBlockMeters,
-      'meterCountsByType': meterCountsByType,
-      'meteringLevel': meteringLevel,
-      'billingImplicationFlag': billingImplicationFlag,
-
-      // Plant / distribution
-      'generatorCount': generatorCount,
-      'generatorTypeCounts': generatorTypeCounts,
-      'fuelTypeCounts': fuelTypeCounts,
-      'phexCount': phexCount,
-      'dhwPlantCount': dhwPlantCount,
-      'communalControlCount': communalControlCount,
-
-      // Dwelling sampling
-      'dwellingInspectionCount': dwellingInspectionCount,
-      ...subMeteringCounts,
-
-      // Safety / escalation
-      'observationCount': observationCount,
-      'unsafeObservationCount': unsafeObservationCount,
-      'unsafeReportCount': unsafeReportCount,
-      'unsafeUnreportedCount': unsafeUnreportedCount,
-      'hasBlockingUnsafeItems': hasBlockingUnsafeItems,
-
-      // Reporting hooks (portal strategy can map these to narratives/actions)
-      'reportingTags': reportingTags,
-
-      // Diagnostics
-      if (dataQualityFlags.isNotEmpty) 'dataQualityFlags': dataQualityFlags,
-    };
-  }
+  static const int schemaVersion = 3;
 
   /// Computes derived metrics using only the submission payload JSON.
   ///
-  /// This is used by the Flutter web editor where we don't have access to the
-  /// local SQLite-backed `formId` / asset tables.
+  /// This is used by HNA submission building and the Flutter web editor.
+  /// It intentionally avoids all SQLite per-asset tables.
   static Map<String, dynamic> computeFromPayload({
     required Map<String, dynamic> formData,
     Map<String, dynamic>? assetsJson,
@@ -139,102 +23,350 @@ class HnaDerivedMetricsCalculator {
 
     final observations = _asListOfMapsFromDynamicList(observationsJson);
     final unsafeObservations = _asListOfMaps(unsafeJson?['unsafeObservations']);
-    final unsafeReports = _asListOfMaps(unsafeJson?['unsafeReports']);
-    final unreportedUnsafe = _asListOfMaps(
-      unsafeJson?['unreportedUnsafeObservations'],
+
+    final networkType = _normalizeNetworkType(
+      formData['meetsHeatNetworkDefinition'],
+    );
+    final isHeatNetwork =
+        networkType == 'district' || networkType == 'communal';
+    final suppliesDwellings = switch (networkType) {
+      'communal_areas_only' => false,
+      'shared_accommodation_no_separate_premises' => false,
+      _ => true,
+    };
+    final numBlocks = _toInt(formData['numBlocks']) ?? 0;
+
+    final totalMeterCount = meters.length;
+    final bulkMeterCount = meters
+        .where((m) => _isBulkMeterType((m['meterType'] ?? '').toString()))
+        .length;
+    final blockMeterCount = meters
+        .where((m) => _isBlockMeterType((m['meterType'] ?? '').toString()))
+        .length;
+
+    // Generator metering expectations:
+    // - Communal heat networks: we expect generator assets to be recorded, and each generator to have individual metering evidence.
+    // - District heat networks: on-site generators may not exist, so generator metering is not required when none are recorded.
+    final allGeneratorsHaveIndividualMeters = networkType == 'communal'
+        ? (generators.isNotEmpty &&
+              generators.every((g) => _equalsYes(g['hasIndividualMeter'])))
+        : (generators.isEmpty
+              ? true
+              : generators.every((g) => _equalsYes(g['hasIndividualMeter'])));
+
+    final allInspectedDwellingsMetered = !suppliesDwellings
+        ? true
+        : dwellingInspections.isNotEmpty &&
+              dwellingInspections.every((d) {
+                final heatingMetered = (d['heatingMetered'] ?? '').toString();
+                final dhwMetered = (d['dhwMetered'] ?? '').toString();
+                return _equalsYes(heatingMetered) || _equalsYes(dhwMetered);
+              });
+
+    final anyInspectedDwellingMetered = !suppliesDwellings
+        ? false
+        : dwellingInspections.any((d) {
+            final heatingMetered = (d['heatingMetered'] ?? '').toString();
+            final dhwMetered = (d['dhwMetered'] ?? '').toString();
+            return _equalsYes(heatingMetered) || _equalsYes(dhwMetered);
+          });
+
+    final anyGeneratorHasIndividualMeter = generators.any(
+      (g) => _equalsYes(g['hasIndividualMeter']),
     );
 
-    final meterCountsByType = _countMetersByBaseTypeJson(meters);
-
-    final generatorTypeCounts = <String, int>{};
-    final fuelTypeCounts = <String, int>{};
-    for (final g in generators) {
-      final generatorType = (g['generatorType'] ?? '').toString().trim();
-      if (generatorType.isNotEmpty) {
-        generatorTypeCounts[generatorType] =
-            (generatorTypeCounts[generatorType] ?? 0) + 1;
-      }
-
-      final fuelType = (g['fuelType'] ?? '').toString().trim();
-      if (fuelType.isNotEmpty) {
-        fuelTypeCounts[fuelType] = (fuelTypeCounts[fuelType] ?? 0) + 1;
-      }
-    }
-
-    final subMeteringCounts = _computeSubMeteringCountsJson(
-      dwellingInspections,
+    final plantInPoorCondition = _countPlantItemsInPoorConditionJson(
+      generators: generators,
+      phex: phex,
+      dhwPlants: dhwPlants,
+      communalControls: communalControls,
     );
+
+    final assistedLivingIndicators = _countAssistedLivingIndicators(formData);
+    final buildingUseCases = _buildBuildingUseCases(formData);
+
+    final meteringProvided = _computeMeteringProvided(
+      isHeatNetwork: isHeatNetwork,
+      suppliesDwellings: suppliesDwellings,
+      numBlocks: numBlocks,
+      totalMeterCount: totalMeterCount,
+      bulkMeterCount: bulkMeterCount,
+      blockMeterCount: blockMeterCount,
+      allGeneratorsHaveIndividualMeters: allGeneratorsHaveIndividualMeters,
+      allInspectedDwellingsMetered: allInspectedDwellingsMetered,
+      anyInspectedDwellingMetered: anyInspectedDwellingMetered,
+      anyGeneratorHasIndividualMeter: anyGeneratorHasIndividualMeter,
+      hasBulkMeter: _toNullableBool(formData['hasBulkMeter']),
+      hasBlockMeters: _toNullableBool(formData['hasBlockMeters']),
+    );
+
+    final dwellingMeteringFeasibility =
+        _computeDwellingMeteringFeasibilityFromInspectionsJson(
+          isHeatNetwork: isHeatNetwork,
+          suppliesDwellings: suppliesDwellings,
+          meteringProvided: meteringProvided,
+          dwellingInspections: dwellingInspections,
+        );
 
     return _computeCore(
       formData: formData,
-      meterCountsByType: meterCountsByType,
-      generatorCount: generators.length,
-      generatorTypeCounts: generatorTypeCounts,
-      fuelTypeCounts: fuelTypeCounts,
-      phexCount: phex.length,
-      dhwPlantCount: dhwPlants.length,
-      communalControlCount: communalControls.length,
-      dwellingInspectionCount: dwellingInspections.length,
-      subMeteringCounts: subMeteringCounts,
+      isHeatNetwork: isHeatNetwork,
+      suppliesDwellings: suppliesDwellings,
+      numBlocks: numBlocks,
+      totalMeterCount: totalMeterCount,
+      bulkMeterCount: bulkMeterCount,
+      blockMeterCount: blockMeterCount,
+      allGeneratorsHaveIndividualMeters: allGeneratorsHaveIndividualMeters,
+      allInspectedDwellingsMetered: allInspectedDwellingsMetered,
+      anyInspectedDwellingMetered: anyInspectedDwellingMetered,
+      anyGeneratorHasIndividualMeter: anyGeneratorHasIndividualMeter,
+      numberOfDwellingsInspected: dwellingInspections.length,
+      plantInPoorCondition: plantInPoorCondition,
+      assistedLivingIndicators: assistedLivingIndicators,
+      buildingUseCases: buildingUseCases,
+      dwellingMeteringFeasibility: dwellingMeteringFeasibility,
       observationCount: observations.length,
-      unsafeObservationCount: unsafeObservations.length,
-      unsafeReportCount: unsafeReports.length,
-      unsafeUnreportedCount: unreportedUnsafe.length,
+      unsafeCount: unsafeObservations.length,
       methodologyVersion: methodologyVersion,
     );
   }
 
-  static Future<Map<String, dynamic>> compute({
-    required int formId,
+  static Map<String, dynamic> _computeCore({
     required Map<String, dynamic> formData,
-    DatabaseHelper? db,
-    String methodologyVersion = 'v1',
-  }) async {
-    final database = db ?? DatabaseHelper.instance;
+    required bool isHeatNetwork,
+    required bool suppliesDwellings,
+    required int numBlocks,
+    required int totalMeterCount,
+    required int bulkMeterCount,
+    required int blockMeterCount,
+    required bool allGeneratorsHaveIndividualMeters,
+    required bool allInspectedDwellingsMetered,
+    required bool anyInspectedDwellingMetered,
+    required bool anyGeneratorHasIndividualMeter,
+    required int numberOfDwellingsInspected,
+    required int plantInPoorCondition,
+    required int assistedLivingIndicators,
+    required String buildingUseCases,
+    required String dwellingMeteringFeasibility,
+    required int observationCount,
+    required int unsafeCount,
+    required String methodologyVersion,
+  }) {
+    final networkClassification = (formData['meetsHeatNetworkDefinition'] ?? '')
+        .toString();
 
-    final meters = await database.getHeatMeters(formId);
-    final generators = await database.getHeatGenerators(formId);
-    final phex = await database.getPlateHeatExchangers(formId);
-    final dhwPlants = await database.getDhwPlants(formId);
-    final communalControls = await database.getCommunalControls(formId);
-    final dwellingInspections = await database.getDwellingInspections(formId);
+    final hasBulkMeter = _toNullableBool(formData['hasBulkMeter']);
+    final hasBlockMeters = _toNullableBool(formData['hasBlockMeters']);
 
-    final observations = await database.getFormObservations(formId);
-    final unsafeObservations = await database.getUnsafeObservations(formId);
-    final unsafeReports = await database.getUnsafeReports(formId);
-    final unreportedUnsafe = await database.getUnreportedUnsafeObservations(
-      formId,
+    final meteringProvided = _computeMeteringProvided(
+      isHeatNetwork: isHeatNetwork,
+      suppliesDwellings: suppliesDwellings,
+      numBlocks: numBlocks,
+      totalMeterCount: totalMeterCount,
+      bulkMeterCount: bulkMeterCount,
+      blockMeterCount: blockMeterCount,
+      allGeneratorsHaveIndividualMeters: allGeneratorsHaveIndividualMeters,
+      allInspectedDwellingsMetered: allInspectedDwellingsMetered,
+      anyInspectedDwellingMetered: anyInspectedDwellingMetered,
+      anyGeneratorHasIndividualMeter: anyGeneratorHasIndividualMeter,
+      hasBulkMeter: hasBulkMeter,
+      hasBlockMeters: hasBlockMeters,
     );
 
-    final meterCountsByType = _countMetersByBaseType(meters);
+    final billingImplicationFlag = _computeBillingImplicationFlag(
+      isHeatNetwork: isHeatNetwork,
+      meteringProvided: meteringProvided,
+    );
 
-    final generatorTypeCounts = <String, int>{};
-    final fuelTypeCounts = <String, int>{};
-    for (final g in generators) {
-      generatorTypeCounts[g.generatorType] =
-          (generatorTypeCounts[g.generatorType] ?? 0) + 1;
-      fuelTypeCounts[g.fuelType] = (fuelTypeCounts[g.fuelType] ?? 0) + 1;
+    final networkCategory = isHeatNetwork
+        ? _computeNetworkCategory(formData)
+        : null;
+
+    return {
+      'schemaVersion': schemaVersion,
+      'methodologyVersion': methodologyVersion,
+      'computedAt': DateTime.now().toIso8601String(),
+      'billingImplicationFlag': billingImplicationFlag,
+      'isHeatNetwork': isHeatNetwork,
+      'observationCount': observationCount,
+      'unsafeCount': unsafeCount,
+      'meteringProvided': meteringProvided,
+      'networkClassification': networkClassification,
+      'dwellingMeteringFeasibility': dwellingMeteringFeasibility,
+      'networkCategory': networkCategory,
+      'numberOfDwellingsInspected': numberOfDwellingsInspected,
+      'plantInPoorCondition': plantInPoorCondition,
+      'assistedLivingIndicators': assistedLivingIndicators,
+      'buildingUseCases': buildingUseCases,
+    };
+  }
+
+  static bool _equalsYes(dynamic value) {
+    final text = (value ?? '').toString().trim().toLowerCase();
+    return text == 'yes' || text == 'true' || text == 'y';
+  }
+
+  static bool _isBulkMeterType(String meterType) =>
+      meterType.toLowerCase().contains('bulk') ||
+      meterType.toLowerCase().contains('inlet');
+
+  static bool _isBlockMeterType(String meterType) =>
+      meterType.toLowerCase().contains('block');
+
+  static List<String> _toStringList(dynamic raw) {
+    if (raw is! List) return const [];
+    return raw.where((e) => e != null).map((e) => e.toString()).toList();
+  }
+
+  static int _countAssistedLivingIndicators(Map<String, dynamic> formData) {
+    final selected = _toStringList(formData['supportedFacilities']);
+    final other = (formData['supportedFacilitiesOther'] ?? '')
+        .toString()
+        .trim();
+    return selected.length + (other.isEmpty ? 0 : 1);
+  }
+
+  static String _buildBuildingUseCases(Map<String, dynamic> formData) {
+    final nature = _toStringList(formData['buildingNature']);
+    final other = (formData['buildingNatureOther'] ?? '').toString().trim();
+    final values = <String>[];
+    for (final n in nature) {
+      if (n.trim().isEmpty) continue;
+      if (n.trim().toLowerCase() == 'other') continue;
+      values.add(n.trim());
+    }
+    if (other.isNotEmpty) values.add(other);
+    return values.join(', ');
+  }
+
+  static int? _computeNetworkCategory(Map<String, dynamic> formData) {
+    final raw = (formData['approximateNetworkAge'] ?? '').toString().trim();
+    if (raw.isEmpty) return null;
+    final v = raw.toLowerCase();
+    if (v.contains('under 5') || v.contains('up to 5') || v.contains('0-5')) {
+      return 1;
+    }
+    if (v.contains('5-20') ||
+        v.contains('5 - 20') ||
+        v.contains('10 - 20') ||
+        v.contains('10-20')) {
+      return 2;
+    }
+    if (v.contains('20+') || v.contains('20 +')) {
+      return 3;
+    }
+    return null;
+  }
+
+  static String _computeMeteringProvided({
+    required bool isHeatNetwork,
+    required bool suppliesDwellings,
+    required int numBlocks,
+    required int totalMeterCount,
+    required int bulkMeterCount,
+    required int blockMeterCount,
+    required bool allGeneratorsHaveIndividualMeters,
+    required bool allInspectedDwellingsMetered,
+    required bool anyInspectedDwellingMetered,
+    required bool anyGeneratorHasIndividualMeter,
+    required bool? hasBulkMeter,
+    required bool? hasBlockMeters,
+  }) {
+    if (!isHeatNetwork) return 'not_applicable';
+
+    final blocks = numBlocks <= 0 ? 1 : numBlocks;
+
+    // Evidence signals (visual inspection + info provided in the form).
+    final bulkEvidence = (hasBulkMeter == true) || bulkMeterCount > 0;
+    final blockEvidence = (hasBlockMeters == true) || blockMeterCount > 0;
+    final dwellingEvidence = suppliesDwellings && anyInspectedDwellingMetered;
+    final generatorEvidence = anyGeneratorHasIndividualMeter;
+
+    final anyEvidence =
+        totalMeterCount > 0 ||
+        bulkEvidence ||
+        blockEvidence ||
+        dwellingEvidence ||
+        generatorEvidence;
+
+    final blockRequired = blocks > 1;
+    final blockOk =
+        !blockRequired || blockMeterCount >= blocks || hasBlockMeters == true;
+
+    // Generator metering is expected for communal networks in this project.
+    // If we have plant assets recorded, we require individual metering evidence on each.
+    final generatorOk = allGeneratorsHaveIndividualMeters;
+
+    final dwellingOk = suppliesDwellings ? allInspectedDwellingsMetered : true;
+
+    final fullyMetered = bulkEvidence && generatorOk && blockOk && dwellingOk;
+
+    if (fullyMetered) return 'present';
+    if (!anyEvidence) return 'not_present';
+    return 'partial';
+  }
+
+  static String _computeDwellingMeteringFeasibilityFromInspectionsJson({
+    required bool isHeatNetwork,
+    required bool suppliesDwellings,
+    required String meteringProvided,
+    required List<Map<String, dynamic>> dwellingInspections,
+  }) {
+    if (!isHeatNetwork) return 'N/A';
+    if (!suppliesDwellings) return 'N/A';
+    if (meteringProvided.toLowerCase() == 'present') return 'N/A';
+    if (dwellingInspections.isEmpty) return 'Further investigation required';
+
+    var anyFurther = false;
+    var anyYes = false;
+    var anyNo = false;
+
+    void absorb(dynamic value) {
+      final v = (value ?? '').toString().trim().toLowerCase();
+      if (v.isEmpty) return;
+      if (v == 'yes') anyYes = true;
+      if (v == 'no') anyNo = true;
+      if (v.contains('further') || v.contains('investigation')) {
+        anyFurther = true;
+      }
     }
 
-    final subMeteringCounts = _computeSubMeteringCounts(dwellingInspections);
+    for (final d in dwellingInspections) {
+      absorb(d['heatingSubMeterFeasible']);
+      absorb(d['dhwSubMeterFeasible']);
+    }
 
-    return _computeCore(
-      formData: formData,
-      meterCountsByType: meterCountsByType,
-      generatorCount: generators.length,
-      generatorTypeCounts: generatorTypeCounts,
-      fuelTypeCounts: fuelTypeCounts,
-      phexCount: phex.length,
-      dhwPlantCount: dhwPlants.length,
-      communalControlCount: communalControls.length,
-      dwellingInspectionCount: dwellingInspections.length,
-      subMeteringCounts: subMeteringCounts,
-      observationCount: observations.length,
-      unsafeObservationCount: unsafeObservations.length,
-      unsafeReportCount: unsafeReports.length,
-      unsafeUnreportedCount: unreportedUnsafe.length,
-      methodologyVersion: methodologyVersion,
-    );
+    if (anyFurther) return 'Further investigation required';
+    if (anyYes) return 'Potentially feasible';
+    if (anyNo) return 'Likely not feasible';
+    return 'Further investigation required';
+  }
+
+  static int _countPlantItemsInPoorConditionJson({
+    required List<Map<String, dynamic>> generators,
+    required List<Map<String, dynamic>> phex,
+    required List<Map<String, dynamic>> dhwPlants,
+    required List<Map<String, dynamic>> communalControls,
+  }) {
+    bool isPoor(String? condition) {
+      final v = (condition ?? '').toLowerCase();
+      return v.contains('poor') || v.contains('replace');
+    }
+
+    var count = 0;
+    for (final g in generators) {
+      if (isPoor((g['condition'] ?? '').toString())) count++;
+    }
+    for (final p in phex) {
+      if (isPoor((p['condition'] ?? '').toString())) count++;
+    }
+    for (final d in dhwPlants) {
+      if (isPoor((d['condition'] ?? '').toString())) count++;
+    }
+    for (final c in communalControls) {
+      if (isPoor((c['condition'] ?? '').toString())) count++;
+    }
+    return count;
   }
 
   static String _normalizeNetworkType(dynamic raw) {
@@ -248,6 +380,8 @@ class HnaDerivedMetricsCalculator {
         return 'in_flat';
       case 'Communal areas only':
         return 'communal_areas_only';
+      case 'Shared accommodation (no separate premises)':
+        return 'shared_accommodation_no_separate_premises';
       default:
         return value == null || value.isEmpty ? 'unknown' : 'unknown';
     }
@@ -256,8 +390,7 @@ class HnaDerivedMetricsCalculator {
   static int? _toInt(dynamic value) {
     if (value == null) return null;
     if (value is int) return value;
-    final parsed = int.tryParse(value.toString());
-    return parsed;
+    return int.tryParse(value.toString());
   }
 
   static bool? _toNullableBool(dynamic value) {
@@ -271,188 +404,22 @@ class HnaDerivedMetricsCalculator {
     return null;
   }
 
-  static String _baseMeterType(String meterType) {
-    final trimmed = meterType.trim();
-    final idx = trimmed.indexOf('(');
-    if (idx <= 0) return trimmed;
-    return trimmed.substring(0, idx).trim();
-  }
-
-  static Map<String, int> _countMetersByBaseType(List<HeatMeter> meters) {
-    final counts = <String, int>{};
-    for (final meter in meters) {
-      final key = _baseMeterType(meter.meterType);
-      counts[key] = (counts[key] ?? 0) + 1;
-    }
-    return counts;
-  }
-
-  static Map<String, int> _countMetersByBaseTypeJson(
-    List<Map<String, dynamic>> meters,
-  ) {
-    final counts = <String, int>{};
-    for (final meter in meters) {
-      final meterType = (meter['meterType'] ?? '').toString().trim();
-      if (meterType.isEmpty) continue;
-      final key = _baseMeterType(meterType);
-      counts[key] = (counts[key] ?? 0) + 1;
-    }
-    return counts;
-  }
-
-  static String _computeMeteringLevel({
-    required Map<String, int> meterCountsByType,
-    required bool? hasBulkMeter,
-    required bool? hasBlockMeters,
-  }) {
-    final hasAnyMeters = meterCountsByType.isNotEmpty;
-    final inferredBulk = meterCountsByType.keys.any(
-      (k) =>
-          k.toLowerCase().contains('bulk') || k.toLowerCase().contains('inlet'),
-    );
-    final inferredBlock = meterCountsByType.keys.any(
-      (k) => k.toLowerCase().contains('block'),
-    );
-
-    final bulk = (hasBulkMeter == true) || inferredBulk;
-    final block = (hasBlockMeters == true) || inferredBlock;
-
-    if (!hasAnyMeters && hasBulkMeter == false && hasBlockMeters == false) {
-      return 'none';
-    }
-
-    if (bulk && block) return 'bulk_plus_block';
-    if (bulk) return 'bulk_only';
-    if (block) return 'block_only';
-
-    return hasAnyMeters ? 'present_unspecified' : 'unknown';
-  }
-
   static String _computeBillingImplicationFlag({
     required bool isHeatNetwork,
-    required bool hasAnyMeters,
-    required bool? hasBulkMeter,
-    required bool? hasBlockMeters,
+    required String meteringProvided,
   }) {
     if (!isHeatNetwork) return 'not_applicable';
 
-    final meteringIndicated =
-        hasAnyMeters || hasBulkMeter == true || hasBlockMeters == true;
-
-    if (meteringIndicated) return 'metering_present';
-
-    // Heat network, but metering presence not confirmed by the assessment.
-    return 'metering_not_confirmed';
-  }
-
-  static List<String> _computeReportingTags({
-    required bool isHeatNetwork,
-    required String meteringLevel,
-    required String billingImplicationFlag,
-    required bool hasBlockingUnsafeItems,
-    required int dwellingInspectionCount,
-  }) {
-    final tags = <String>[];
-
-    tags.add(isHeatNetwork ? 'IS_HEAT_NETWORK' : 'NOT_HEAT_NETWORK');
-    tags.add('METERING_LEVEL_${meteringLevel.toUpperCase()}');
-    tags.add('BILLING_${billingImplicationFlag.toUpperCase()}');
-
-    if (hasBlockingUnsafeItems) tags.add('UNSAFE_BLOCKING_ITEMS');
-    if (dwellingInspectionCount == 0) tags.add('NO_DWELLING_INSPECTIONS');
-
-    return tags;
-  }
-
-  static Map<String, dynamic> _computeSubMeteringCounts(
-    List<DwellingInspection> inspections,
-  ) {
-    int heatingFeasibleYes = 0;
-    int heatingFeasibleNo = 0;
-    int heatingFeasibleUnknown = 0;
-
-    int dhwFeasibleYes = 0;
-    int dhwFeasibleNo = 0;
-    int dhwFeasibleUnknown = 0;
-
-    for (final i in inspections) {
-      final h = _toNullableBool(i.heatingSubMeterFeasible);
-      if (h == true) {
-        heatingFeasibleYes++;
-      } else if (h == false) {
-        heatingFeasibleNo++;
-      } else {
-        heatingFeasibleUnknown++;
-      }
-
-      final d = _toNullableBool(i.dhwSubMeterFeasible);
-      if (d == true) {
-        dhwFeasibleYes++;
-      } else if (d == false) {
-        dhwFeasibleNo++;
-      } else {
-        dhwFeasibleUnknown++;
-      }
-    }
-
-    return {
-      'heatingSubMeterFeasibleYesCount': heatingFeasibleYes,
-      'heatingSubMeterFeasibleNoCount': heatingFeasibleNo,
-      'heatingSubMeterFeasibleUnknownCount': heatingFeasibleUnknown,
-      'dhwSubMeterFeasibleYesCount': dhwFeasibleYes,
-      'dhwSubMeterFeasibleNoCount': dhwFeasibleNo,
-      'dhwSubMeterFeasibleUnknownCount': dhwFeasibleUnknown,
-    };
-  }
-
-  static Map<String, dynamic> _computeSubMeteringCountsJson(
-    List<Map<String, dynamic>> inspections,
-  ) {
-    int heatingFeasibleYes = 0;
-    int heatingFeasibleNo = 0;
-    int heatingFeasibleUnknown = 0;
-
-    int dhwFeasibleYes = 0;
-    int dhwFeasibleNo = 0;
-    int dhwFeasibleUnknown = 0;
-
-    for (final i in inspections) {
-      final h = _toNullableBool(i['heatingSubMeterFeasible']);
-      if (h == true) {
-        heatingFeasibleYes++;
-      } else if (h == false) {
-        heatingFeasibleNo++;
-      } else {
-        heatingFeasibleUnknown++;
-      }
-
-      final d = _toNullableBool(i['dhwSubMeterFeasible']);
-      if (d == true) {
-        dhwFeasibleYes++;
-      } else if (d == false) {
-        dhwFeasibleNo++;
-      } else {
-        dhwFeasibleUnknown++;
-      }
-    }
-
-    return {
-      'heatingSubMeterFeasibleYesCount': heatingFeasibleYes,
-      'heatingSubMeterFeasibleNoCount': heatingFeasibleNo,
-      'heatingSubMeterFeasibleUnknownCount': heatingFeasibleUnknown,
-      'dhwSubMeterFeasibleYesCount': dhwFeasibleYes,
-      'dhwSubMeterFeasibleNoCount': dhwFeasibleNo,
-      'dhwSubMeterFeasibleUnknownCount': dhwFeasibleUnknown,
-    };
+    return meteringProvided.toLowerCase() == 'present'
+        ? 'metering_present'
+        : 'metering_not_confirmed';
   }
 
   static List<Map<String, dynamic>> _asListOfMaps(dynamic value) {
     if (value is! List) return const [];
     final out = <Map<String, dynamic>>[];
     for (final item in value) {
-      if (item is Map) {
-        out.add(Map<String, dynamic>.from(item));
-      }
+      if (item is Map) out.add(Map<String, dynamic>.from(item));
     }
     return out;
   }
@@ -463,9 +430,7 @@ class HnaDerivedMetricsCalculator {
     if (value == null) return const [];
     final out = <Map<String, dynamic>>[];
     for (final item in value) {
-      if (item is Map) {
-        out.add(Map<String, dynamic>.from(item));
-      }
+      if (item is Map) out.add(Map<String, dynamic>.from(item));
     }
     return out;
   }

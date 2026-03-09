@@ -1,10 +1,8 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
+import '../services/platform/image_persistence.dart';
 import '../database/database_helper.dart';
 import '../components/app_scaffold.dart';
-import '../components/form_widgets.dart';
 import '../components/app_autocomplete_field.dart';
 
 class AddAssetScreen extends StatefulWidget {
@@ -201,15 +199,10 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       await _assetModelFieldKey.currentState?.saveSuggestion();
       await _locationFieldKey.currentState?.saveSuggestion();
 
-      final List<String> imagePaths = [];
-      for (final image in _images) {
-        final appDir = await getApplicationDocumentsDirectory();
-        final fileName =
-            'asset_${DateTime.now().millisecondsSinceEpoch}_${imagePaths.length}.jpg';
-        final savedImage = File('${appDir.path}/$fileName');
-        await File(image.path).copy(savedImage.path);
-        imagePaths.add(savedImage.path);
-      }
+      final imagePaths = await persistPickedImagePaths(
+        _images,
+        prefix: 'asset',
+      );
 
       // Helper function to convert to camel case
       String toCamelCase(String text) {
@@ -630,24 +623,6 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
                                   },
                                 ),
                                 const SizedBox(height: 24),
-
-                                // Asset Images
-                                Text(
-                                  'Asset Images',
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.titleMedium,
-                                ),
-                                const SizedBox(height: 8),
-                                AppMultiImageCapture(
-                                  images: _images,
-                                  onImagesChanged: (newImages) {
-                                    setState(() => _images = newImages);
-                                  },
-                                ),
-                                const SizedBox(height: 16),
-
-                                // Asset Observations Button
                                 ElevatedButton.icon(
                                   onPressed: _viewObservations,
                                   icon: Icon(

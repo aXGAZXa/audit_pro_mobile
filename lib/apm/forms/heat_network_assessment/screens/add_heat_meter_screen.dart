@@ -1,12 +1,14 @@
-import 'dart:io';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import '../../../database/database_helper.dart';
-import '../../../models/heat_meter.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
+import 'hna_observations_list_screen.dart';
+import 'package:uuid/uuid.dart';
+import '../../../services/platform/image_persistence.dart';
 
 class AddHeatMeterScreen extends StatefulWidget {
   const AddHeatMeterScreen({super.key});
@@ -30,26 +32,58 @@ class _AddHeatMeterScreenState extends State<AddHeatMeterScreen> {
   int? _formId;
   String? _meterType; // 'Bulk Meter', 'Block Level Meter', etc.
   String? _baseMeterType; // Without brackets
-  HeatMeter? _existingMeter;
+  Map<String, dynamic>? _existingMeter;
   String? _selectedAge;
   String? _operational;
+
   String? _relatedAssetType;
-  int? _relatedAssetId;
+  dynamic _relatedAssetId;
 
   List<XFile> _images = [];
   bool _isLoading = false;
   int _observationCount = 0;
 
+  Map<String, dynamic>? _assetsJsonArg;
+  void Function(Map<String, dynamic> nextAssets)? _onAssetsChangedArg;
+
+  List<Map<String, dynamic>>? _observationsJsonArg;
+  void Function(List<Map<String, dynamic>> next)? _onObservationsChangedArg;
+  bool _didInitArgs = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (_didInitArgs) return;
+
     final args =
         ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    if (args != null && _formId == null) {
+    if (args != null) {
+      _didInitArgs = true;
       _formId = args['formId'] as int?;
       _meterType = args['meterType'] as String? ?? 'Heat Meter';
       _relatedAssetType = args['relatedAssetType'] as String?;
-      _relatedAssetId = args['relatedAssetId'] as int?;
+      _relatedAssetId = args['relatedAssetId'];
+
+      final assetsArg = args['assetsJson'];
+      if (assetsArg is Map) {
+        _assetsJsonArg = Map<String, dynamic>.from(assetsArg);
+      }
+      final onAssetsChanged = args['onAssetsChanged'];
+      if (onAssetsChanged is void Function(Map<String, dynamic>)) {
+        _onAssetsChangedArg = onAssetsChanged;
+      }
+
+      final obsArg = args['observationsJson'];
+      if (obsArg is List) {
+        _observationsJsonArg = obsArg
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList(growable: true);
+      }
+      final onObsChanged = args['onObservationsChanged'];
+      if (onObsChanged is void Function(List<Map<String, dynamic>>)) {
+        _onObservationsChangedArg = onObsChanged;
+      }
 
       if (args.containsKey('initialLocation') &&
           _locationController.text.isEmpty) {
@@ -59,8 +93,8 @@ class _AddHeatMeterScreenState extends State<AddHeatMeterScreen> {
       _baseMeterType = _meterType;
 
       final rawMeter = args['meter'];
-      if (rawMeter is HeatMeter) {
-        _existingMeter = rawMeter;
+      if (rawMeter is Map) {
+        _existingMeter = Map<String, dynamic>.from(rawMeter);
         _loadExistingData();
       }
     }
@@ -69,12 +103,22 @@ class _AddHeatMeterScreenState extends State<AddHeatMeterScreen> {
   void _loadExistingData() {
     if (_existingMeter == null) return;
 
-    _meterType = _existingMeter!.meterType;
-    _relatedAssetType = _existingMeter!.relatedAssetType;
-    _relatedAssetId = _existingMeter!.relatedAssetId;
+    _meterType = (_existingMeter!['meterType'] ?? '').toString();
+    final existingRelatedType = (_existingMeter!['relatedAssetType'] ?? '')
+        .toString()
+        .trim();
+    if (existingRelatedType.isNotEmpty) {
+      _relatedAssetType = existingRelatedType;
+    }
+
+    final existingRelatedId = _existingMeter!['relatedAssetId'];
+    if (existingRelatedId != null &&
+        existingRelatedId.toString().trim().isNotEmpty) {
+      _relatedAssetId = existingRelatedId;
+    }
 
     // Extract base type and block name if applicable
-    if (_meterType!.contains('(') && _meterType!.contains(')')) {
+    if ((_meterType ?? '').contains('(') && (_meterType ?? '').contains(')')) {
       final start = _meterType!.indexOf('(');
       final end = _meterType!.lastIndexOf(')');
       if (end > start) {
@@ -87,68 +131,104 @@ class _AddHeatMeterScreenState extends State<AddHeatMeterScreen> {
       _baseMeterType = _meterType;
     }
 
-    _assetMakeController.text = _existingMeter!.make;
-    _assetModelController.text = _existingMeter!.model;
-    _locationController.text = _existingMeter!.location;
-    _selectedAge = _normalizeAgeBand(_existingMeter!.ageRange);
-    _serialNumberController.text = _existingMeter!.serialNumber ?? '';
-    _operational = _existingMeter!.operational;
-    _meterReadingController.text = _existingMeter!.reading ?? '';
+    _assetMakeController.text = (_existingMeter!['make'] ?? '').toString();
+    _assetModelController.text = (_existingMeter!['model'] ?? '').toString();
+    _locationController.text = (_existingMeter!['location'] ?? '').toString();
+    _selectedAge = _normalizeAgeBand(
+      (_existingMeter!['ageRange'] ?? '').toString(),
+    );
+    _serialNumberController.text = (_existingMeter!['serialNumber'] ?? '')
+        .toString();
+    _operational = (_existingMeter!['operational'] ?? '').toString();
+    if (_operational != null && _operational!.trim().isEmpty) {
+      _operational = null;
+    }
+    _meterReadingController.text = (_existingMeter!['reading'] ?? '')
+        .toString();
 
-    if (_existingMeter!.imagePaths.isNotEmpty) {
-      _images = _existingMeter!.imagePaths.map((path) => XFile(path)).toList();
+    final imagePathsRaw = _existingMeter!['imagePaths'];
+    if (imagePathsRaw is List && imagePathsRaw.isNotEmpty) {
+      _images = imagePathsRaw.map((p) => XFile(p.toString())).toList();
     }
 
     _loadObservationCount();
   }
 
   Future<void> _loadObservationCount() async {
-    if (_existingMeter == null || _existingMeter!.id == null) return;
+    final id = (_existingMeter?['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
+    final questionRef = 'heat_meter_$id';
+    int count = 0;
 
-    // Use heat_meter_ID reference pattern
-    final questionRef = 'heat_meter_${_existingMeter!.id}';
+    final obsRaw = _observationsJsonArg;
+    if (obsRaw != null) {
+      for (final o in obsRaw) {
+        final ref = (o['questionReference'] ?? o['question_reference'] ?? '')
+            .toString()
+            .trim();
+        if (ref == questionRef) count++;
+      }
+    } else if (_formId != null) {
+      final form = await DatabaseHelper.instance.getForm(_formId!);
+      if (form == null) return;
 
-    final observations = await DatabaseHelper.instance.getQuestionObservations(
-      _formId!,
-      questionRef,
-    );
+      final draftRaw = form['form_data'];
+      if (draftRaw is! Map) return;
+      final draftDoc = Map<String, dynamic>.from(draftRaw);
+
+      final persistedObsRaw = draftDoc['observations'];
+      if (persistedObsRaw is List) {
+        for (final o in persistedObsRaw.whereType<Map>()) {
+          final ref = (o['questionReference'] ?? o['question_reference'] ?? '')
+              .toString()
+              .trim();
+          if (ref == questionRef) count++;
+        }
+      }
+    }
 
     if (!mounted) return;
-    setState(() {
-      _observationCount = observations.length;
-    });
+    setState(() => _observationCount = count);
   }
 
   Future<void> _viewObservations() async {
     // If no ID exists, try to save first
-    if (_existingMeter == null || _existingMeter!.id == null) {
-      final success = await _saveInternal();
+    final currentId = (_existingMeter?['id'] ?? '').toString().trim();
+    if (currentId.isEmpty) {
+      final savedMeter = await _saveInternal();
       // If save failed or was cancelled, we can't proceed to observations
-      if (!success) return;
+      if (savedMeter == null) return;
       if (!mounted) return;
     }
 
-    if (_existingMeter?.id == null) return;
+    final meterId = (_existingMeter?['id'] ?? '').toString().trim();
+    if (meterId.isEmpty) return;
 
     if (!mounted) return;
-
-    final meterId = _existingMeter!.id!;
     final makeModel =
         '${_assetMakeController.text} ${_assetModelController.text}'.trim();
+    final observations = _observationsJsonArg;
+    final onChanged = _onObservationsChangedArg;
+    if (observations == null || onChanged == null) return;
 
-    await Navigator.pushNamed(
+    await Navigator.push(
       context,
-      '/observations-list',
-      arguments: {
-        'formId': _formId,
-        'questionReference': 'heat_meter_$meterId',
-        'questionText':
-            '$_meterType${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
-        'sectionName': 'Heat Meter Observations',
-        'assetId': meterId,
-        'assetType': _meterType,
-        'assetMakeModel': makeModel.isEmpty ? null : makeModel,
-      },
+      MaterialPageRoute(
+        builder: (context) => HnaObservationsListScreen(
+          observationsJson: observations,
+          onObservationsChanged: (List<Map<String, dynamic>> next) {
+            _observationsJsonArg = next;
+            onChanged(next);
+          },
+          questionReference: 'heat_meter_$meterId',
+          questionText:
+              '$_meterType${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
+          sectionName: 'Heat Meter Observations',
+          assetId: meterId,
+          assetType: _meterType,
+          assetMakeModel: makeModel.isEmpty ? null : makeModel,
+        ),
+      ),
     );
 
     if (!mounted) return;
@@ -156,14 +236,14 @@ class _AddHeatMeterScreenState extends State<AddHeatMeterScreen> {
   }
 
   Future<void> _saveAndClose() async {
-    final success = await _saveInternal();
-    if (success && mounted) {
-      Navigator.pop(context);
+    final savedMeter = await _saveInternal();
+    if (savedMeter != null && mounted) {
+      Navigator.pop(context, Map<String, dynamic>.from(savedMeter));
     }
   }
 
-  Future<bool> _saveInternal() async {
-    if (!_formKey.currentState!.validate()) return false;
+  Future<Map<String, dynamic>?> _saveInternal() async {
+    if (!_formKey.currentState!.validate()) return null;
     if (_images.isEmpty) {
       showDialog(
         context: context,
@@ -178,35 +258,27 @@ class _AddHeatMeterScreenState extends State<AddHeatMeterScreen> {
           ],
         ),
       );
-      return false;
+      return null;
     }
 
     setState(() => _isLoading = true);
 
     try {
+      final cb = _onAssetsChangedArg;
+      if (_formId == null && cb == null) {
+        throw Exception('Missing formId');
+      }
+
       // Save autocomplete suggestions
       await _assetMakeFieldKey.currentState?.saveSuggestion();
       await _assetModelFieldKey.currentState?.saveSuggestion();
       await _locationFieldKey.currentState?.saveSuggestion();
 
       // Process Images
-      final List<String> imagePaths = [];
-      final appDir = await getApplicationDocumentsDirectory();
-
-      for (final image in _images) {
-        final path = image.path;
-        // Check if path is already in app documents directory (existing image)
-        if (path.startsWith(appDir.path)) {
-          imagePaths.add(path);
-        } else {
-          // New image - copy it
-          final fileName =
-              'heat_meter_${DateTime.now().millisecondsSinceEpoch}_${imagePaths.length}.jpg';
-          final savedImage = File('${appDir.path}/$fileName');
-          await File(path).copy(savedImage.path);
-          imagePaths.add(savedImage.path);
-        }
-      }
+      final imagePaths = await persistPickedImagePaths(
+        _images,
+        prefix: 'heat_meter',
+      );
 
       // Helper function to convert to camel case
       String toCamelCase(String text) {
@@ -243,59 +315,118 @@ class _AddHeatMeterScreenState extends State<AddHeatMeterScreen> {
             '$_baseMeterType (${_blockNameController.text.trim()})';
       }
 
-      final meter = HeatMeter(
-        id: _existingMeter?.id, // Update if exists
-        formId: _formId!,
-        meterType: finalMeterType,
-        make: toCamelCase(_assetMakeController.text.trim()),
-        model: toSmartCamelCase(_assetModelController.text.trim()),
-        location: toCamelCase(_locationController.text.trim()),
-        ageRange: _selectedAge!,
-        serialNumber: _serialNumberController.text.trim().isEmpty
+      final existingId = (_existingMeter?['id'] ?? '').toString().trim();
+      final id = existingId.isEmpty ? const Uuid().v4() : existingId;
+      final nowUtc = DateTime.now().toUtc().toIso8601String();
+      final createdAt =
+          (_existingMeter?['createdAt'] ?? _existingMeter?['createdAtUtc'])
+              ?.toString();
+
+      final meter = <String, dynamic>{
+        'id': id,
+        'meterType': finalMeterType,
+        'make': toCamelCase(_assetMakeController.text.trim()),
+        'model': toSmartCamelCase(_assetModelController.text.trim()),
+        'location': toCamelCase(_locationController.text.trim()),
+        'ageRange': _selectedAge!,
+        'serialNumber': _serialNumberController.text.trim().isEmpty
             ? null
             : _serialNumberController.text.trim(),
-        operational: _operational!,
-        reading: _meterReadingController.text.trim().isEmpty
+        'operational': _operational!,
+        'reading': _meterReadingController.text.trim().isEmpty
             ? null
             : _meterReadingController.text.trim(),
-        imagePaths: imagePaths,
-        relatedAssetType: _relatedAssetType,
-        relatedAssetId: _relatedAssetId,
-        createdAt: _existingMeter?.createdAt,
-        updatedAt: DateTime.now(),
+        'imagePaths': imagePaths,
+        'relatedAssetType': _relatedAssetType,
+        'relatedAssetId': _relatedAssetId,
+        'createdAt': createdAt ?? nowUtc,
+        'updatedAt': nowUtc,
+      };
+
+      // Prefer propagating changes up to the parent HNA draft (single JSON
+      // document) so parent autosave/submission cannot overwrite meters.
+      if (cb != null) {
+        final assets = _assetsJsonArg != null
+            ? Map<String, dynamic>.from(_assetsJsonArg!)
+            : <String, dynamic>{};
+
+        final listRaw = assets['heatMeters'];
+        final meters = listRaw is List
+            ? listRaw
+                  .whereType<Map>()
+                  .map((e) => Map<String, dynamic>.from(e))
+                  .toList(growable: true)
+            : <Map<String, dynamic>>[];
+
+        final idx = meters.indexWhere((m) => (m['id'] ?? '').toString() == id);
+        if (idx >= 0) {
+          meters[idx] = meter;
+        } else {
+          meters.add(meter);
+        }
+        assets['heatMeters'] = meters;
+
+        cb(assets);
+        _assetsJsonArg = Map<String, dynamic>.from(assets);
+
+        if (mounted) {
+          setState(() => _existingMeter = Map<String, dynamic>.from(meter));
+        }
+        return meter;
+      }
+
+      final form = await DatabaseHelper.instance.getForm(_formId!);
+      if (form == null) throw Exception('Form not found');
+
+      final draftRaw = form['form_data'];
+      if (draftRaw is! Map) throw Exception('Invalid draft doc');
+      final draftDoc = Map<String, dynamic>.from(draftRaw);
+
+      final assetsRaw = draftDoc['assets'];
+      final assets = assetsRaw is Map
+          ? Map<String, dynamic>.from(assetsRaw)
+          : <String, dynamic>{};
+
+      final listRaw = assets['heatMeters'];
+      final meters = listRaw is List
+          ? listRaw
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList(growable: true)
+          : <Map<String, dynamic>>[];
+
+      final idx = meters.indexWhere((m) => (m['id'] ?? '').toString() == id);
+      if (idx >= 0) {
+        meters[idx] = meter;
+      } else {
+        meters.add(meter);
+      }
+      assets['heatMeters'] = meters;
+      draftDoc['assets'] = assets;
+
+      final status = (form['status'] ?? 'draft').toString();
+      final formType = (form['form_type'] ?? 'heat_network_assessment')
+          .toString();
+      final uuid = (form['uuid'] ?? '').toString();
+
+      await DatabaseHelper.instance.saveForm(
+        id: _formId,
+        formType: formType,
+        status: status,
+        formData: jsonDecode(jsonEncode(draftDoc)) as Map<String, dynamic>,
+        uuid: uuid.isEmpty ? null : uuid,
       );
 
-      final savedId = await DatabaseHelper.instance.saveHeatMeter(meter);
+      setState(() => _existingMeter = Map<String, dynamic>.from(meter));
 
-      // Update our internal state with the new ID and data
-      setState(() {
-        _existingMeter = HeatMeter(
-          id: savedId,
-          formId: meter.formId,
-          meterType: meter.meterType,
-          make: meter.make,
-          model: meter.model,
-          location: meter.location,
-          ageRange: meter.ageRange,
-          serialNumber: meter.serialNumber,
-          operational: meter.operational,
-          reading: meter.reading,
-          imagePaths: meter.imagePaths,
-          relatedAssetType: meter.relatedAssetType,
-          relatedAssetId: meter.relatedAssetId,
-          createdAt: meter.createdAt,
-          updatedAt: meter.updatedAt,
-        );
-      });
-
-      return true;
+      return meter;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Error saving meter: $e')));
       }
-      return false;
+      return null;
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -310,6 +441,7 @@ class _AddHeatMeterScreenState extends State<AddHeatMeterScreen> {
     _locationController.dispose();
     _serialNumberController.dispose();
     _meterReadingController.dispose();
+    _blockNameController.dispose();
     super.dispose();
   }
 

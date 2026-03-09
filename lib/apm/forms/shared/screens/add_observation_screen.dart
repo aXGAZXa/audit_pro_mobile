@@ -1,12 +1,9 @@
-import 'dart:io';
-
 import 'package:audit_pro_mobile/apm/components/app_autocomplete_field.dart';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:audit_pro_mobile/apm/services/platform/image_persistence.dart';
 
 class AddObservationScreen extends StatefulWidget {
   final String? title;
@@ -134,36 +131,12 @@ class _AddObservationScreenState extends State<AddObservationScreen> {
         .cast<XFile>()
         .toList();
 
-    final persistedImages = <XFile>[];
-    if (capturedImages.isNotEmpty) {
-      final appDir = await getApplicationDocumentsDirectory();
-      for (var i = 0; i < capturedImages.length; i++) {
-        final img = capturedImages[i];
-        final sourcePath = img.path;
-
-        if (sourcePath.startsWith(appDir.path)) {
-          persistedImages.add(img);
-          continue;
-        }
-
-        final ext = p.extension(sourcePath);
-        final safeExt = ext.isNotEmpty ? ext : '.jpg';
-        final fileName =
-            'obs_${DateTime.now().millisecondsSinceEpoch}_$i$safeExt';
-        final destPath = p.join(appDir.path, fileName);
-
-        try {
-          await File(sourcePath).copy(destPath);
-          persistedImages.add(XFile(destPath));
-        } catch (_) {
-          persistedImages.add(img);
-        }
-      }
-    }
-
-    final imagesToSave = persistedImages.isEmpty
+    final imagesToSave = capturedImages.isEmpty
         ? capturedImages
-        : persistedImages;
+        : (await persistPickedImagePaths(
+            capturedImages,
+            prefix: 'obs',
+          )).map(XFile.new).toList(growable: false);
 
     if (widget.onSave != null) {
       widget.onSave!(notes, imagesToSave);

@@ -8,6 +8,14 @@ import 'package:audit_pro_mobile/apm/models/plate_heat_exchanger.dart';
 class HnaPdfDerivedCalculator {
   static const int schemaVersion = 1;
 
+  static const List<String> _residentialNatureTypes = <String>[
+    'Residential',
+    'Care/Nursing Home',
+    'Assisted Living',
+    'Temporary Accomodation',
+    'Sheltered Accomodation',
+  ];
+
   /// Computes PDF-derived fields using the portal submission payload JSON.
   ///
   /// This is used by the Flutter web editor where we don't have access to the
@@ -18,6 +26,7 @@ class HnaPdfDerivedCalculator {
   static Map<String, dynamic> computeFromPayload({
     required Map<String, dynamic> formData,
     required Map<String, dynamic> assetsJson,
+    List<dynamic>? observationsJson,
     String methodologyVersion = 'v1',
   }) {
     final meters = _asListOfModel<HeatMeter>(
@@ -187,6 +196,7 @@ class HnaPdfDerivedCalculator {
       dhwPlants: dhwPlants,
       communalControls: communalControls,
       dwellingInspections: dwellingInspections,
+      observationsJson: observationsJson,
       methodologyVersion: methodologyVersion,
     );
   }
@@ -199,6 +209,7 @@ class HnaPdfDerivedCalculator {
     required List<DhwPlant> dhwPlants,
     required List<CommunalControl> communalControls,
     required List<DwellingInspection> dwellingInspections,
+    List<dynamic>? observationsJson,
     String methodologyVersion = 'v1',
   }) {
     final meetsHeatNetworkDefinitionRaw =
@@ -213,6 +224,7 @@ class HnaPdfDerivedCalculator {
     final isHeatNetwork = isDistrictNetwork || isCommunalNetwork;
 
     final numBlocks = _toInt(formData['numBlocks']) ?? 0;
+    final numDwellings = _toInt(formData['numDwellings']) ?? 0;
 
     final hasBulkMeter = _toNullableBool(formData['hasBulkMeter']);
     final hasBlockMeters = _toNullableBool(formData['hasBlockMeters']);
@@ -245,6 +257,11 @@ class HnaPdfDerivedCalculator {
       formData['dwellingInspectionsPossible'],
     );
 
+    final buildingNature = _toStringList(formData['buildingNature']);
+    final isResidential = buildingNature.any(
+      (e) => _residentialNatureTypes.contains(e.trim()),
+    );
+
     final dwellingArrangementsConsistent =
         (formData['dwellingArrangementsConsistent'] ?? 'Unverified').toString();
 
@@ -262,6 +279,25 @@ class HnaPdfDerivedCalculator {
     final hasBlockObserved = (hasBlockMeters == true) || hasBlockMetersAssets;
 
     final hasDwellingMetersObserved = hasDwellingMeters;
+    final hasNonOperationalMeters = meters.any(
+      (m) => !_isOperationalMeterState(m.operational),
+    );
+    final hasNonOperationalAssets =
+        generators.any((g) => !_isOperationalAssetState(g.operational)) ||
+        dhwPlants.any((p) => !_isOperationalAssetState(p.operational)) ||
+        communalControls.any((c) => !_isOperationalAssetState(c.operational)) ||
+        dwellingInspections.any(
+          (d) => !_isOperationalAssetState(d.operational),
+        );
+    final hasOldMeters = meters.any((m) => _isTenPlusAgeRange(m.ageRange));
+    final hasPoorConditionAssets =
+        generators.any((g) => _isPoorCondition(g.condition)) ||
+        phex.any((p) => _isPoorCondition(p.condition)) ||
+        dhwPlants.any((p) => _isPoorCondition(p.condition)) ||
+        communalControls.any((c) => _isPoorCondition(c.condition)) ||
+        dwellingInspections.any((d) => _isPoorCondition(d.condition));
+    final hasObservations = _hasAnyObservations(observationsJson);
+    final hasUnsafeObservations = _hasAnyUnsafeObservations(observationsJson);
 
     final networkAgeCategory = _parseAgeCategory(
       (formData['approximateNetworkAge'] ?? '').toString(),
@@ -274,23 +310,27 @@ class HnaPdfDerivedCalculator {
           meetsHeatNetworkDefinitionRaw: meetsHeatNetworkDefinitionRaw,
         );
 
-    final triageNetworkCategory = switch (networkAgeCategory) {
-      _AgeCategory.under5 => 'Category 1: Under 5 years',
-      _AgeCategory.fiveToTwenty => 'Category 2: 5–20 years',
-      _AgeCategory.twentyPlus => 'Category 3: 20+ years',
-      _AgeCategory.unknown => 'Network age category: Not stated',
-    };
+    final triageNetworkCategory = !isHeatNetwork
+        ? ''
+        : switch (networkAgeCategory) {
+            _AgeCategory.under5 => 'Category 1: Under 5 years',
+            _AgeCategory.fiveToTwenty => 'Category 2: 5–20 years',
+            _AgeCategory.twentyPlus => 'Category 3: 20+ years',
+            _AgeCategory.unknown => 'Network age category: Not stated',
+          };
 
-    final triageNetworkCategoryMeaning = switch (networkAgeCategory) {
-      _AgeCategory.under5 =>
-        'Recent networks are treated as higher governance priority where key metering is not observed.',
-      _AgeCategory.fiveToTwenty =>
-        'Mid-life networks are commonly prioritised for further investigation and optimisation scoping.',
-      _AgeCategory.twentyPlus =>
-        'For legacy networks, follow-on work is commonly progressed via a full feasibility and options appraisal to support long-term strategy (including potential replacement). Optimisation studies may be a lower priority depending on condition, governance considerations, and client objectives.',
-      _AgeCategory.unknown =>
-        'Network age banding is used for triage only; where not recorded, prioritisation relies on other observed factors.',
-    };
+    final triageNetworkCategoryMeaning = !isHeatNetwork
+        ? ''
+        : switch (networkAgeCategory) {
+            _AgeCategory.under5 =>
+              'Recent networks are commonly treated as higher triage priority where key metering is not observed.',
+            _AgeCategory.fiveToTwenty =>
+              'Mid-life networks are commonly prioritised for further investigation and optimisation scoping.',
+            _AgeCategory.twentyPlus =>
+              'Legacy network: use condition-led appraisal to stage CAPEX decisions (targeted feasibility/options appraisal where risk/condition indicators justify it), and consider metering feasibility as part of a further study if network condition is found to be viable.',
+            _AgeCategory.unknown =>
+              'Network age banding is used for triage only; where not recorded, prioritisation relies on other observed factors.',
+          };
 
     final dwellingFeasibilitySignal = _computeDwellingFeasibilitySignal(
       dwellingInspections,
@@ -301,12 +341,16 @@ class HnaPdfDerivedCalculator {
       hasBulkObserved: hasBulkObserved,
       hasBlockObserved: hasBlockObserved,
       numBlocks: numBlocks,
+      generators: generators,
+      phex: phex,
       supportedLivingIndicatorsRecorded: supportedLivingIndicatorsRecorded,
       supportedFacilities: supportedFacilities,
       supportedFacilitiesOther: supportedFacilitiesOther,
       dwellingInspections: dwellingInspections,
       hasDwellingMetersObserved: hasDwellingMetersObserved,
       dwellingFeasibilitySignal: dwellingFeasibilitySignal,
+      hasNonOperationalMeters: hasNonOperationalMeters,
+      hasOldMeters: hasOldMeters,
     );
 
     final triageDwellingConsistencySignals =
@@ -314,6 +358,7 @@ class HnaPdfDerivedCalculator {
           areDwellingInspectionsPossible: areDwellingInspectionsPossible,
           dwellingInspections: dwellingInspections,
           dwellingArrangementsConsistent: dwellingArrangementsConsistent,
+          isResidential: isResidential,
         );
 
     final triageRegulatoryPreparednessSignals =
@@ -326,6 +371,10 @@ class HnaPdfDerivedCalculator {
           hasDwellingMetersObserved: hasDwellingMetersObserved,
           dwellingArrangementsConsistent: dwellingArrangementsConsistent,
           areDwellingInspectionsPossible: areDwellingInspectionsPossible,
+          hasPoorConditionAssets: hasPoorConditionAssets,
+          hasNonOperationalAssets: hasNonOperationalAssets,
+          hasObservations: hasObservations,
+          hasUnsafeObservations: hasUnsafeObservations,
         );
 
     final triageStrategicFramingFlags = _buildTriageStrategicFlags(
@@ -342,10 +391,14 @@ class HnaPdfDerivedCalculator {
           dhwPlants.isNotEmpty ||
           communalControls.isNotEmpty,
       networkAgeCategory: networkAgeCategory,
+      hasNonOperationalAssets: hasNonOperationalAssets,
+      hasObservations: hasObservations,
     );
 
     final triageConfidenceAndLimitations = _buildTriageConfidenceAndLimitations(
       areDwellingInspectionsPossible: areDwellingInspectionsPossible,
+      numDwellings: numDwellings,
+      buildingNature: buildingNature,
     );
 
     return {
@@ -476,6 +529,10 @@ class HnaPdfDerivedCalculator {
     if (raw.toLowerCase() == 'communal areas only'.toLowerCase()) {
       return 'This site was recorded as not meeting the heat network definition because heat and/or DHW was recorded as serving communal areas only.';
     }
+    if (raw.toLowerCase() ==
+        'shared accommodation (no separate premises)'.toLowerCase()) {
+      return 'This site was recorded as not meeting the heat network definition because it was recorded as shared accommodation with no self-contained dwellings / separate premises.';
+    }
 
     if (raw.isEmpty) {
       return 'This site was recorded as not meeting the heat network definition.';
@@ -489,33 +546,24 @@ class HnaPdfDerivedCalculator {
     required bool hasBulkObserved,
     required bool hasBlockObserved,
     required int numBlocks,
+    required List<HeatGenerator> generators,
+    required List<PlateHeatExchanger> phex,
     required bool supportedLivingIndicatorsRecorded,
     required List<String> supportedFacilities,
     required String supportedFacilitiesOther,
     required List<DwellingInspection> dwellingInspections,
     required bool hasDwellingMetersObserved,
     required _DwellingFeasibilitySignal dwellingFeasibilitySignal,
+    required bool hasNonOperationalMeters,
+    required bool hasOldMeters,
   }) {
     final signals = <String>[];
 
     if (!isHeatNetwork) {
       signals.add(
-        'This site was recorded as not meeting the heat network definition; metering observations are included for record only.',
+        'This site was recorded as not meeting the heat network definition; heat network metering requirements do not apply. Monitor for regulatory changes and reassess if new evidence supports reclassification as a heat network.',
       );
-    }
-
-    signals.add(
-      hasBulkObserved
-          ? 'Bulk/inlet metering was observed or recorded.'
-          : 'Bulk/inlet metering was not observed during the site inspection.',
-    );
-
-    if (numBlocks > 1) {
-      signals.add(
-        hasBlockObserved
-            ? 'Block-level metering was observed or recorded.'
-            : 'Block-level metering was not observed during the site inspection.',
-      );
+      return signals;
     }
 
     if (supportedLivingIndicatorsRecorded) {
@@ -530,51 +578,72 @@ class HnaPdfDerivedCalculator {
       if (supportedOther.isNotEmpty) details.add(supportedOther);
 
       final detailText = details.isNotEmpty ? ' (${details.join('; ')})' : '';
-      signals.add(
-        'Supported living indicators were recorded$detailText. This may be relevant when considering whether any exemption position applies under the Heat Network (Metering and Billing) Regulations 2014. Exemption criteria and regulatory expectations may change; confirm any exemption position as part of follow-on work. This report does not determine exemption status.',
-      );
+      signals.add('Supported living indicators were recorded$detailText.');
     } else {
+      signals.add('Supported living indicators were not recorded.');
+    }
+
+    signals.add(
+      hasBulkObserved
+          ? 'Bulk/inlet metering was observed or recorded.'
+          : 'Bulk/inlet metering was not observed during the site inspection.',
+    );
+
+    if (_hasCommunalPlantAssetsWithoutMeters(generators, phex)) {
       signals.add(
-        'Supported living indicators were not recorded. On that basis, an exemption position under the Heat Network (Metering and Billing) Regulations 2014 would not typically be expected on supported-living grounds. Exemption criteria and regulatory expectations may change; confirm any exemption position as part of follow-on work. This report does not determine exemption status.',
+        'No individual meters were recorded on the communal plant assets.',
       );
     }
 
-    if (dwellingInspections.isNotEmpty) {
+    if (numBlocks > 1) {
       signals.add(
-        hasDwellingMetersObserved
-            ? 'Dwelling-level metering was observed in the sampled dwellings.'
-            : 'Dwelling-level metering was not observed in the sampled dwellings.',
-      );
-    } else {
-      signals.add(
-        'Dwelling-level metering could not be confirmed due to limited access and/or inspection limitations.',
+        hasBlockObserved
+            ? 'Block-level metering was observed or recorded.'
+            : 'Block-level metering was not observed during the site inspection.',
       );
     }
 
-    signals.add(switch (dwellingFeasibilitySignal) {
-      _DwellingFeasibilitySignal.universallyFeasible =>
-        'Dwelling-level metering was recorded as potentially feasible (based on the dwelling sample).',
-      _DwellingFeasibilitySignal.notFeasible =>
-        'Dwelling-level metering was recorded as not feasible (based on the dwelling sample).',
-      _DwellingFeasibilitySignal.mixedOrInconclusive =>
-        'Dwelling-level metering feasibility was mixed or could not be concluded (based on the dwelling sample).',
-      _DwellingFeasibilitySignal.notRecorded =>
-        'Dwelling-level metering feasibility was not recorded.',
-    });
+    signals.add(
+      _buildDwellingMeteringRiskSignal(
+        dwellingInspections: dwellingInspections,
+        hasDwellingMetersObserved: hasDwellingMetersObserved,
+        dwellingFeasibilitySignal: dwellingFeasibilitySignal,
+      ),
+    );
 
-    return signals;
+    if (hasNonOperationalMeters) {
+      signals.add(
+        'One or more meters were recorded as not operational; investigate functionality, confirm whether readings can be relied upon, and consider repair or replacement as required.',
+      );
+    }
+
+    if (hasOldMeters) {
+      signals.add(
+        'One or more meters were recorded as over 10 years old; review manufacturer calibration and replacement recommendations and confirm whether recalibration and/or replacement is required.',
+      );
+    }
+
+    return signals.toSet().toList();
   }
 
   static List<String> _buildTriageDwellingConsistencySignals({
     required bool areDwellingInspectionsPossible,
     required List<DwellingInspection> dwellingInspections,
     required String dwellingArrangementsConsistent,
+    required bool isResidential,
   }) {
     final signals = <String>[];
 
+    if (dwellingInspections.isEmpty && !isResidential) {
+      signals.add(
+        'No dwellings were recorded for this site; dwelling sampling is not applicable.',
+      );
+      return signals;
+    }
+
     if (!areDwellingInspectionsPossible || dwellingInspections.isEmpty) {
       signals.add(
-        'Heating/DHW dwelling arrangements (system configuration) could not be verified across a representative sample due to access constraints; further survey may be required where follow-on work depends on dwelling-level configuration.',
+        'Heating/DHW dwelling arrangements (system configuration) could not be verified from the available evidence; further survey may be required where follow-on work depends on dwelling-level configuration.',
       );
       return signals;
     }
@@ -612,63 +681,290 @@ class HnaPdfDerivedCalculator {
     required bool hasDwellingMetersObserved,
     required String dwellingArrangementsConsistent,
     required bool areDwellingInspectionsPossible,
+    required bool hasPoorConditionAssets,
+    required bool hasNonOperationalAssets,
+    required bool hasObservations,
+    required bool hasUnsafeObservations,
   }) {
     final signals = <String>[];
+    final primaryPathway = _selectPrimaryTriagePathway(
+      isHeatNetwork: isHeatNetwork,
+      networkAgeCategory: networkAgeCategory,
+      dwellingFeasibilitySignal: dwellingFeasibilitySignal,
+      hasDwellingMetersObserved: hasDwellingMetersObserved,
+      hasBulkObserved: hasBulkObserved,
+    );
+    final requiresWiderDwellingSampling = _needsWiderDwellingSampling(
+      dwellingArrangementsConsistent: dwellingArrangementsConsistent,
+      areDwellingInspectionsPossible: areDwellingInspectionsPossible,
+    );
+    final nonHeatNetworkMonitorSignal =
+        'Monitor for regulatory changes and reassess classification if new evidence supports reclassification as a heat network.';
 
-    if (isHeatNetwork) {
-      if (!hasBulkObserved) {
-        final qualifier = networkAgeCategory == _AgeCategory.under5
-            ? 'For a recently recorded network, this should be treated as a higher priority.'
-            : 'This may warrant prioritised follow-on review of metering topology and governance.';
-        signals.add('Bulk/inlet metering was not observed. $qualifier');
-      }
-
-      if (dwellingFeasibilitySignal ==
-          _DwellingFeasibilitySignal.universallyFeasible) {
+    switch (primaryPathway) {
+      case _TriagePrimaryPathway.nonHeatNetwork:
+        break;
+      case _TriagePrimaryPathway.legacyConditionLed:
+        signals.add(
+          'Follow-on: carry out condition-led appraisal and targeted surveys to inform lifecycle decisions, confirm network condition, and identify whether the system remains a viable candidate for improvement works. Where the network is found to be viable, commission an optimisation/controls study to scope metering opportunities, funding alignment, and wider network improvements.',
+        );
+        signals.add(
+          'Follow-on: monitor regulatory change and legacy-network retirement/replacement timelines so the forward plan can be updated as requirements develop.',
+        );
+      case _TriagePrimaryPathway.meteringImplementation:
+        final bulkSignal = _buildBulkMeterPreparednessSignal(
+          isHeatNetwork: isHeatNetwork,
+          hasBulkObserved: hasBulkObserved,
+          networkAgeCategory: networkAgeCategory,
+        );
+        if (bulkSignal != null) {
+          signals.add(bulkSignal);
+        }
         signals.add(
           'Follow-on: appoint a metering and billing specialist to confirm the approach and implement dwelling-level metering and billing where practicable.',
         );
-      } else if (dwellingFeasibilitySignal ==
-          _DwellingFeasibilitySignal.mixedOrInconclusive) {
+      case _TriagePrimaryPathway.meteringFeasibilityStudy:
+        final bulkSignal = _buildBulkMeterPreparednessSignal(
+          isHeatNetwork: isHeatNetwork,
+          hasBulkObserved: hasBulkObserved,
+          networkAgeCategory: networkAgeCategory,
+        );
+        if (bulkSignal != null) {
+          signals.add(bulkSignal);
+        }
         signals.add(
           'Follow-on: further investigate and confirm feasibility for dwelling-level metering (targeted feasibility study to confirm constraints and options).',
         );
         signals.add(
           'Follow-on: where metering is confirmed as feasible, appoint a metering and billing specialist to confirm the approach and implement metering and billing where practicable.',
         );
-      } else if (dwellingFeasibilitySignal ==
-          _DwellingFeasibilitySignal.notFeasible) {
-        if (supportedLivingIndicatorsRecorded) {
-          signals.add(
-            'Follow-on: where supported living indicators are present, obtain specialist advice to confirm whether any exemption position applies under the Heat Network (Metering and Billing) Regulations 2014.',
-          );
+      case _TriagePrimaryPathway.meteringPositionConfirmation:
+        final bulkSignal = _buildBulkMeterPreparednessSignal(
+          isHeatNetwork: isHeatNetwork,
+          hasBulkObserved: hasBulkObserved,
+          networkAgeCategory: networkAgeCategory,
+        );
+        if (bulkSignal != null) {
+          signals.add(bulkSignal);
         }
-
-        if (networkAgeCategory == _AgeCategory.twentyPlus) {
-          signals.add(
-            'Follow-on: for a legacy network, seek regulator guidance on applicable timelines/expectations and consider a full feasibility and options appraisal as part of longer-term strategy (including potential replacement pathways). Where metering is feasible at any level, it can still be considered.',
-          );
-        }
-      } else if (!hasDwellingMetersObserved) {
         signals.add(
           'Follow-on: dwelling-level metering was not observed or could not be confirmed in the sample; confirm the site-wide position if this affects next steps.',
         );
-      }
+      case _TriagePrimaryPathway.monitorAndRecord:
+        if (dwellingFeasibilitySignal ==
+                _DwellingFeasibilitySignal.notFeasible &&
+            supportedLivingIndicatorsRecorded) {
+          signals.add(
+            'Follow-on: supported living indicators were recorded; ensure these are captured in the follow-on specialist review where relevant.',
+          );
+        }
+    }
 
-      if (dwellingArrangementsConsistent.trim().toLowerCase() == 'no' ||
-          !areDwellingInspectionsPossible) {
-        signals.add(
-          'Follow-on: widen dwelling sampling if site-wide assumptions are needed for the next stage.',
-        );
-      }
-    } else {
+    if (isHeatNetwork && requiresWiderDwellingSampling) {
       signals.add(
-        'The site was recorded as not meeting the heat network definition; any follow-on work should first confirm network classification if new evidence becomes available.',
+        'Follow-on: widen dwelling sampling if site-wide assumptions are needed for the next stage.',
       );
     }
 
-    signals.add('Monitor updates from the regulator.');
-    return signals;
+    final defectFollowOn = _buildConditionAndObservationFollowOn(
+      hasPoorConditionAssets: hasPoorConditionAssets,
+      hasNonOperationalAssets: hasNonOperationalAssets,
+      hasObservations: hasObservations,
+    );
+    final unsafeFollowOn = hasUnsafeObservations
+        ? 'Follow-on: unsafe observations were recorded; urgent investigation and remedial action should be arranged without delay in accordance with the recorded classification.'
+        : null;
+
+    if (!isHeatNetwork) {
+      signals.add(
+        _buildNonHeatNetworkFollowOn(
+          defectFollowOn: defectFollowOn,
+          unsafeFollowOn: unsafeFollowOn,
+          monitorSignal: nonHeatNetworkMonitorSignal,
+        ),
+      );
+      return signals.toSet().toList();
+    }
+
+    if (defectFollowOn != null) {
+      signals.add(defectFollowOn);
+    }
+
+    if (unsafeFollowOn != null) {
+      signals.add(unsafeFollowOn);
+    }
+
+    return signals.toSet().toList();
+  }
+
+  static _TriagePrimaryPathway _selectPrimaryTriagePathway({
+    required bool isHeatNetwork,
+    required _AgeCategory networkAgeCategory,
+    required _DwellingFeasibilitySignal dwellingFeasibilitySignal,
+    required bool hasDwellingMetersObserved,
+    required bool hasBulkObserved,
+  }) {
+    if (!isHeatNetwork) {
+      return _TriagePrimaryPathway.nonHeatNetwork;
+    }
+
+    if (networkAgeCategory == _AgeCategory.twentyPlus) {
+      return _TriagePrimaryPathway.legacyConditionLed;
+    }
+
+    if (dwellingFeasibilitySignal ==
+            _DwellingFeasibilitySignal.universallyFeasible &&
+        !hasDwellingMetersObserved) {
+      return _TriagePrimaryPathway.meteringImplementation;
+    }
+
+    if (dwellingFeasibilitySignal ==
+        _DwellingFeasibilitySignal.mixedOrInconclusive) {
+      return _TriagePrimaryPathway.meteringFeasibilityStudy;
+    }
+
+    if (!hasBulkObserved || !hasDwellingMetersObserved) {
+      return _TriagePrimaryPathway.meteringPositionConfirmation;
+    }
+
+    return _TriagePrimaryPathway.monitorAndRecord;
+  }
+
+  static bool _needsWiderDwellingSampling({
+    required String dwellingArrangementsConsistent,
+    required bool areDwellingInspectionsPossible,
+  }) {
+    return dwellingArrangementsConsistent.trim().toLowerCase() == 'no' ||
+        !areDwellingInspectionsPossible;
+  }
+
+  static String? _buildBulkMeterPreparednessSignal({
+    required bool isHeatNetwork,
+    required bool hasBulkObserved,
+    required _AgeCategory networkAgeCategory,
+  }) {
+    if (!isHeatNetwork || hasBulkObserved) {
+      return null;
+    }
+
+    final qualifier = switch (networkAgeCategory) {
+      _AgeCategory.under5 =>
+        'For a recently recorded network, this should be treated as a higher priority.',
+      _AgeCategory.twentyPlus =>
+        'For a legacy network, prioritise condition-led surveys first so viability, remaining service life, and current topology are understood before metering follow-on work is commissioned.',
+      _ =>
+        'This may warrant prioritised follow-on review of metering topology.',
+    };
+
+    return 'Bulk/inlet metering was not observed. $qualifier';
+  }
+
+  static String? _buildConditionAndObservationFollowOn({
+    required bool hasPoorConditionAssets,
+    required bool hasNonOperationalAssets,
+    required bool hasObservations,
+  }) {
+    if (hasPoorConditionAssets && hasNonOperationalAssets && hasObservations) {
+      return 'Follow-on: poor or very poor condition assets, non-operational assets, and related inspection issues were recorded; commission a condition survey/report and investigate the recorded defects to confirm remaining service life, identify faults, restore operation where practicable, and inform repair or replacement requirements.';
+    }
+
+    if (hasPoorConditionAssets && hasObservations) {
+      return 'Follow-on: poor or very poor condition assets and related inspection issues were recorded; commission a condition survey/report and investigate the recorded defects to confirm remaining service life, identify faults, and inform repair or replacement requirements.';
+    }
+
+    if (hasNonOperationalAssets && hasObservations) {
+      return 'Follow-on: non-operational assets and related inspection issues were recorded; investigate the recorded defects, confirm root causes and remaining serviceability, and plan repair, reinstatement, or replacement as appropriate.';
+    }
+
+    if (hasPoorConditionAssets) {
+      return 'Follow-on: one or more assets were recorded in poor or very poor condition; commission a condition survey/report as a higher priority to confirm remaining service life, identify defects, and inform repair or replacement requirements.';
+    }
+
+    if (hasNonOperationalAssets) {
+      return 'Follow-on: one or more assets were recorded as non-operational; investigate the cause, confirm whether service can be safely restored, and plan repair or replacement as appropriate.';
+    }
+
+    if (hasObservations) {
+      return 'Follow-on: issues were recorded in the inspection observations; review, investigate, and rectify these items as appropriate.';
+    }
+
+    return null;
+  }
+
+  static String _buildNonHeatNetworkFollowOn({
+    required String? defectFollowOn,
+    required String? unsafeFollowOn,
+    required String monitorSignal,
+  }) {
+    final parts = <String>[];
+
+    if (defectFollowOn != null && defectFollowOn.trim().isNotEmpty) {
+      parts.add(defectFollowOn.trim());
+    }
+    if (unsafeFollowOn != null && unsafeFollowOn.trim().isNotEmpty) {
+      parts.add(unsafeFollowOn.trim());
+    }
+
+    parts.add(monitorSignal);
+    return parts.join(' ');
+  }
+
+  static bool _isOperationalMeterState(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    return normalized == 'yes' || normalized == 'operational';
+  }
+
+  static bool _isOperationalAssetState(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    if (normalized.isEmpty) return true;
+    return normalized == 'yes' ||
+        normalized == 'operational' ||
+        normalized == 'true';
+  }
+
+  static bool _isTenPlusAgeRange(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    return normalized.contains('10 plus') ||
+        normalized.contains('10+') ||
+        normalized.contains('10-20') ||
+        normalized.contains('10 - 20') ||
+        normalized.contains('20+') ||
+        normalized.contains('20 plus');
+  }
+
+  static bool _isPoorCondition(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    return normalized == 'poor' || normalized == 'very poor';
+  }
+
+  static bool _hasAnyObservations(List<dynamic>? observationsJson) {
+    if (observationsJson == null) return false;
+    for (final item in observationsJson) {
+      if (item is! Map) continue;
+      return true;
+    }
+    return false;
+  }
+
+  static bool _hasAnyUnsafeObservations(List<dynamic>? observationsJson) {
+    if (observationsJson == null) return false;
+    for (final item in observationsJson) {
+      if (item is! Map) continue;
+      final observation = Map<String, dynamic>.from(item);
+      final raw = observation['is_unsafe'] ?? observation['isUnsafe'];
+      if (raw == true || raw == 1) return true;
+      final asText = (raw ?? '').toString().trim().toLowerCase();
+      if (asText == 'true' || asText == '1' || asText == 'yes') return true;
+      final classification =
+          (observation['unsafe_classification'] ??
+                  observation['unsafeClassification'] ??
+                  '')
+              .toString()
+              .trim();
+      if (classification.isNotEmpty) return true;
+    }
+    return false;
   }
 
   static List<String> _buildTriageStrategicFlags({
@@ -681,18 +977,32 @@ class HnaPdfDerivedCalculator {
     required String heatSuppliedUnclearDetails,
     required bool hasPlantAssets,
     required _AgeCategory networkAgeCategory,
+    required bool hasNonOperationalAssets,
+    required bool hasObservations,
   }) {
     final flags = <String>[];
 
-    if (isHeatNetwork && !hasBulkObserved) {
-      flags.add('Metering review prioritised');
+    if (!isHeatNetwork) {
+      if (hasNonOperationalAssets || hasObservations) {
+        flags.add('Asset issues recorded');
+      } else {
+        flags.add('Monitor for regulatory changes');
+      }
+      return flags;
     }
 
-    if (isHeatNetwork &&
-        !hasDwellingMetersObserved &&
-        dwellingFeasibilitySignal ==
-            _DwellingFeasibilitySignal.universallyFeasible) {
-      flags.add('Metering review prioritised');
+    final hasMeteringGaps =
+        !hasBulkObserved ||
+        (!hasDwellingMetersObserved &&
+            dwellingFeasibilitySignal ==
+                _DwellingFeasibilitySignal.universallyFeasible);
+
+    if (hasMeteringGaps) {
+      if (networkAgeCategory == _AgeCategory.twentyPlus) {
+        flags.add('Metering gaps recorded');
+      } else {
+        flags.add('Metering review prioritised');
+      }
     }
 
     if (!areDwellingInspectionsPossible ||
@@ -713,14 +1023,19 @@ class HnaPdfDerivedCalculator {
     }
 
     if (isHeatNetwork && networkAgeCategory == _AgeCategory.twentyPlus) {
-      flags.add('Legacy strategic planning case');
+      flags.add('Legacy: staged lifecycle decisions');
+    }
+
+    if (hasObservations) {
+      flags.add('Observations recorded');
     }
 
     if (flags.isEmpty) {
       flags.add('Monitor and record');
     }
 
-    return flags;
+    // De-duplicate (without re-ordering) so badges don't repeat.
+    return flags.toSet().toList();
   }
 
   static _DwellingFeasibilitySignal _computeDwellingFeasibilitySignal(
@@ -731,9 +1046,15 @@ class HnaPdfDerivedCalculator {
     String normalizeYesNoUnknown(String? value) {
       final v = value?.trim();
       if (v == null || v.isEmpty) return '';
-      if (v.toLowerCase() == 'yes') return 'Yes';
-      if (v.toLowerCase() == 'no') return 'No';
-      if (v.toLowerCase() == 'unknown') return 'Unknown';
+      final lower = v.toLowerCase();
+      if (lower == 'yes') return 'Yes';
+      if (lower == 'no') return 'No';
+      if (lower == 'unknown' ||
+          lower.contains('further investigation') ||
+          lower.contains('investigation required') ||
+          lower.contains('investigation needed')) {
+        return 'Unknown';
+      }
       return '';
     }
 
@@ -764,14 +1085,81 @@ class HnaPdfDerivedCalculator {
     return _DwellingFeasibilitySignal.notRecorded;
   }
 
+  static bool _hasCommunalPlantAssetsWithoutMeters(
+    List<HeatGenerator> generators,
+    List<PlateHeatExchanger> phex,
+  ) {
+    final plantMeterStates = <String?>[
+      ...generators.map((g) => g.hasIndividualMeter),
+      ...phex.map((p) => p.hasIndividualMeter),
+    ];
+
+    if (plantMeterStates.isEmpty) return false;
+
+    final hasMeteredPlant = plantMeterStates.any(_isYesValue);
+    final hasExplicitUnmeteredPlant = plantMeterStates.any(_isNoValue);
+    return !hasMeteredPlant && hasExplicitUnmeteredPlant;
+  }
+
+  static String _buildDwellingMeteringRiskSignal({
+    required List<DwellingInspection> dwellingInspections,
+    required bool hasDwellingMetersObserved,
+    required _DwellingFeasibilitySignal dwellingFeasibilitySignal,
+  }) {
+    if (dwellingInspections.isEmpty) {
+      return 'Dwelling-level metering could not be confirmed due to limited access and/or inspection limitations.';
+    }
+
+    if (hasDwellingMetersObserved) {
+      return switch (dwellingFeasibilitySignal) {
+        _DwellingFeasibilitySignal.mixedOrInconclusive =>
+          'Dwelling-level metering was observed in parts of the dwelling sample, but wider feasibility was mixed or requires further investigation.',
+        _DwellingFeasibilitySignal.notFeasible =>
+          'Dwelling-level metering was observed in the sampled dwellings, but wider implementation was recorded as not feasible based on the dwelling sample.',
+        _ => 'Dwelling-level metering was observed in the sampled dwellings.',
+      };
+    }
+
+    return switch (dwellingFeasibilitySignal) {
+      _DwellingFeasibilitySignal.universallyFeasible =>
+        'Dwelling-level metering was not observed in the sampled dwellings, but was recorded as potentially feasible based on the dwelling sample.',
+      _DwellingFeasibilitySignal.notFeasible =>
+        'Dwelling-level metering was not observed in the sampled dwellings and was recorded as not feasible based on the dwelling sample.',
+      _DwellingFeasibilitySignal.mixedOrInconclusive =>
+        'Dwelling-level metering was not observed in the sampled dwellings; feasibility was mixed or requires further investigation based on the dwelling sample.',
+      _DwellingFeasibilitySignal.notRecorded =>
+        'Dwelling-level metering was not observed in the sampled dwellings; feasibility was not recorded.',
+    };
+  }
+
+  static bool _isYesValue(String? value) =>
+      (value ?? '').trim().toLowerCase() == 'yes';
+
+  static bool _isNoValue(String? value) =>
+      (value ?? '').trim().toLowerCase() == 'no';
+
   static String _buildTriageConfidenceAndLimitations({
     required bool areDwellingInspectionsPossible,
+    required int numDwellings,
+    required List<String> buildingNature,
   }) {
     final parts = <String>[
       'This summary is based on a visual site inspection and the information reasonably visible or accessible on the day.',
       'Where building age and network age are stated, they reflect recorded estimates.',
       'It does not constitute a detailed technical assessment, compliance determination, or performance review.',
     ];
+
+    final inferredResidential = buildingNature.any(
+      (value) => _residentialNatureTypes.contains(value.trim()),
+    );
+    final hasNoRecordedDwellings = !inferredResidential && numDwellings <= 0;
+
+    if (hasNoRecordedDwellings) {
+      parts.add(
+        'No dwellings were recorded for this site; dwelling sampling is not applicable.',
+      );
+      return parts.join(' ');
+    }
 
     if (!areDwellingInspectionsPossible) {
       parts.add(
@@ -860,4 +1248,13 @@ enum _DwellingFeasibilitySignal {
   universallyFeasible,
   notFeasible,
   mixedOrInconclusive,
+}
+
+enum _TriagePrimaryPathway {
+  nonHeatNetwork,
+  legacyConditionLed,
+  meteringImplementation,
+  meteringFeasibilityStudy,
+  meteringPositionConfirmation,
+  monitorAndRecord,
 }

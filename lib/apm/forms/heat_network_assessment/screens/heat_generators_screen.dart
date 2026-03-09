@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../components/app_info_panel.dart';
 import '../../../components/form_widgets.dart';
-import '../../../components/observations_list_screen.dart';
+import 'hna_observations_list_screen.dart';
 import 'phex_list_screen.dart';
 import 'heat_generator_list_screen.dart';
 import 'communal_control_list_screen.dart';
@@ -14,6 +14,13 @@ class HeatGeneratorsScreen extends StatefulWidget {
   final VoidCallback onBack;
   final int? formId;
 
+  final Map<String, dynamic>? assetsJson;
+  final void Function(Map<String, dynamic> nextAssets)? onAssetsChanged;
+
+  final List<Map<String, dynamic>>? observationsJson;
+  final void Function(List<Map<String, dynamic>> nextObservations)?
+  onObservationsChanged;
+
   const HeatGeneratorsScreen({
     super.key,
     required this.formData,
@@ -21,6 +28,10 @@ class HeatGeneratorsScreen extends StatefulWidget {
     required this.onNext,
     required this.onBack,
     this.formId,
+    this.assetsJson,
+    this.onAssetsChanged,
+    this.observationsJson,
+    this.onObservationsChanged,
   });
 
   @override
@@ -79,65 +90,96 @@ class _HeatGeneratorsScreenState extends State<HeatGeneratorsScreen> {
       widget.formData['meetsHeatNetworkDefinition'] as String? ?? '';
 
   void _managePhex() {
-    if (widget.formId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please save the form first')),
-      );
-      return;
-    }
+    if (widget.assetsJson == null || widget.onAssetsChanged == null) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => const PhexListScreen(),
-        settings: RouteSettings(arguments: {'formId': widget.formId}),
+        settings: RouteSettings(
+          arguments: {
+            'assetsJson': widget.assetsJson,
+            'onAssetsChanged': widget.onAssetsChanged,
+            'observationsJson': widget.observationsJson,
+            'onObservationsChanged': widget.onObservationsChanged,
+          },
+        ),
       ),
     );
   }
 
   void _manageGenerators() {
-    if (widget.formId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please save the form first')),
-      );
-      return;
-    }
+    if (widget.assetsJson == null || widget.onAssetsChanged == null) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => const HeatGeneratorListScreen(),
-        settings: RouteSettings(arguments: {'formId': widget.formId}),
+        settings: RouteSettings(
+          arguments: {
+            'assetsJson': widget.assetsJson,
+            'onAssetsChanged': widget.onAssetsChanged,
+            'observationsJson': widget.observationsJson,
+            'onObservationsChanged': widget.onObservationsChanged,
+          },
+        ),
       ),
     );
   }
 
   void _manageCommunalControls() {
-    if (widget.formId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please save the form first')),
-      );
-      return;
-    }
+    if (widget.assetsJson == null || widget.onAssetsChanged == null) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => const CommunalControlListScreen(),
-        settings: RouteSettings(arguments: {'formId': widget.formId}),
+        settings: RouteSettings(
+          arguments: {
+            'assetsJson': widget.assetsJson,
+            'onAssetsChanged': widget.onAssetsChanged,
+            'observationsJson': widget.observationsJson,
+            'onObservationsChanged': widget.onObservationsChanged,
+          },
+        ),
       ),
     );
   }
 
   void _manageDhwPlants() {
-    if (widget.formId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please save the form first')),
-      );
-      return;
-    }
+    if (widget.assetsJson == null || widget.onAssetsChanged == null) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => const DhwPlantListScreen(),
-        settings: RouteSettings(arguments: {'formId': widget.formId}),
+        settings: RouteSettings(
+          arguments: {
+            'assetsJson': widget.assetsJson,
+            'onAssetsChanged': widget.onAssetsChanged,
+            'observationsJson': widget.observationsJson,
+            'onObservationsChanged': widget.onObservationsChanged,
+          },
+        ),
+      ),
+    );
+  }
+
+  void _openJsonObservations({
+    required String questionReference,
+    required String questionText,
+    required String sectionName,
+  }) {
+    final observations = widget.observationsJson;
+    final onChanged = widget.onObservationsChanged;
+    if (observations == null || onChanged == null) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => HnaObservationsListScreen(
+          observationsJson: observations,
+          onObservationsChanged: onChanged,
+          questionReference: questionReference,
+          questionText: questionText,
+          sectionName: sectionName,
+        ),
       ),
     );
   }
@@ -247,48 +289,18 @@ class _HeatGeneratorsScreenState extends State<HeatGeneratorsScreen> {
   }
 
   void _manageCommunalPipeworkObservations() {
-    if (widget.formId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please save the form first')),
-      );
-      return;
-    }
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const ObservationsListScreen(),
-        settings: RouteSettings(
-          arguments: {
-            'formId': widget.formId,
-            'questionReference': 'communal_pipework',
-            'questionText': 'Communal Pipework Observations',
-            'sectionName': 'On-Site Generation & Distribution',
-          },
-        ),
-      ),
+    _openJsonObservations(
+      questionReference: 'communal_pipework',
+      questionText: 'Communal Pipework Observations',
+      sectionName: 'On-Site Generation & Distribution',
     );
   }
 
   void _manageCommunalSpaceHeatingObservations() {
-    if (widget.formId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please save the form first')),
-      );
-      return;
-    }
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const ObservationsListScreen(),
-        settings: RouteSettings(
-          arguments: {
-            'formId': widget.formId,
-            'questionReference': 'communal_space_heating',
-            'questionText': 'Communal Space Heating Observations',
-            'sectionName': 'On-Site Generation & Distribution',
-          },
-        ),
-      ),
+    _openJsonObservations(
+      questionReference: 'communal_space_heating',
+      questionText: 'Communal Space Heating Observations',
+      sectionName: 'On-Site Generation & Distribution',
     );
   }
 
@@ -391,8 +403,9 @@ class _HeatGeneratorsScreenState extends State<HeatGeneratorsScreen> {
                     subtitle: '',
                     icon: subItem.icon,
                     color: Colors.blue,
-                    selected: widget.formData[
-                            'communalPipeworkPartInsulatedCondition'] ==
+                    selected:
+                        widget
+                            .formData['communalPipeworkPartInsulatedCondition'] ==
                         subItem.label,
                     onTap: () {
                       widget.onDataChanged(
@@ -618,16 +631,12 @@ class _HeatGeneratorsScreenState extends State<HeatGeneratorsScreen> {
                               children: [
                                 Text(
                                   'Record the main communal heating controls that are readily visible during a plant room or energy centre inspection.',
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.bodySmall,
+                                  style: Theme.of(context).textTheme.bodySmall,
                                 ),
                                 const SizedBox(height: 12),
                                 Text(
                                   'Capture controls that manage the overall system, such as:',
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.bodySmall,
+                                  style: Theme.of(context).textTheme.bodySmall,
                                 ),
                                 const SizedBox(height: 4),
                                 Padding(
@@ -636,7 +645,12 @@ class _HeatGeneratorsScreenState extends State<HeatGeneratorsScreen> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children:
-                                        ['BMS panels or central controllers', 'Heating timers or programmers', 'Main system thermostats or heat sensors', 'Controls used for monitoring or remote access'].map((item) {
+                                        [
+                                          'BMS panels or central controllers',
+                                          'Heating timers or programmers',
+                                          'Main system thermostats or heat sensors',
+                                          'Controls used for monitoring or remote access',
+                                        ].map((item) {
                                           return Padding(
                                             padding: const EdgeInsets.only(
                                               bottom: 2,
@@ -668,14 +682,11 @@ class _HeatGeneratorsScreenState extends State<HeatGeneratorsScreen> {
                                 const SizedBox(height: 12),
                                 RichText(
                                   text: TextSpan(
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
+                                    style: Theme.of(context).textTheme.bodySmall
                                         ?.copyWith(
-                                          color:
-                                              Theme.of(
-                                                context,
-                                              ).textTheme.bodySmall?.color,
+                                          color: Theme.of(
+                                            context,
+                                          ).textTheme.bodySmall?.color,
                                         ),
                                     children: const [
                                       TextSpan(
@@ -773,16 +784,12 @@ class _HeatGeneratorsScreenState extends State<HeatGeneratorsScreen> {
                               children: [
                                 Text(
                                   'Record the main communal heating controls that are readily visible during a plant room or energy centre inspection.',
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.bodySmall,
+                                  style: Theme.of(context).textTheme.bodySmall,
                                 ),
                                 const SizedBox(height: 12),
                                 Text(
                                   'Capture controls that manage the overall system, such as:',
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.bodySmall,
+                                  style: Theme.of(context).textTheme.bodySmall,
                                 ),
                                 const SizedBox(height: 4),
                                 Padding(
@@ -791,7 +798,12 @@ class _HeatGeneratorsScreenState extends State<HeatGeneratorsScreen> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children:
-                                        ['BMS panels or central controllers', 'Heating timers or programmers', 'Main system thermostats or heat sensors', 'Controls used for monitoring or remote access'].map((item) {
+                                        [
+                                          'BMS panels or central controllers',
+                                          'Heating timers or programmers',
+                                          'Main system thermostats or heat sensors',
+                                          'Controls used for monitoring or remote access',
+                                        ].map((item) {
                                           return Padding(
                                             padding: const EdgeInsets.only(
                                               bottom: 2,
@@ -823,14 +835,11 @@ class _HeatGeneratorsScreenState extends State<HeatGeneratorsScreen> {
                                 const SizedBox(height: 12),
                                 RichText(
                                   text: TextSpan(
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
+                                    style: Theme.of(context).textTheme.bodySmall
                                         ?.copyWith(
-                                          color:
-                                              Theme.of(
-                                                context,
-                                              ).textTheme.bodySmall?.color,
+                                          color: Theme.of(
+                                            context,
+                                          ).textTheme.bodySmall?.color,
                                         ),
                                     children: const [
                                       TextSpan(

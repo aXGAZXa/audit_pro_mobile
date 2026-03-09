@@ -1,14 +1,14 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import '../../../database/database_helper.dart';
-import '../../../models/dwelling_inspection.dart';
+import 'package:uuid/uuid.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
-import 'add_heat_meter_screen.dart';
 import 'feasibility_details_screen.dart';
+import 'hna_observations_list_screen.dart';
+import 'meter_list_screen.dart';
+import '../../../services/form_validation_feedback.dart';
+import '../../../services/platform/image_persistence.dart';
 
 class AddDwellingInspectionScreen extends StatefulWidget {
   const AddDwellingInspectionScreen({super.key});
@@ -24,6 +24,8 @@ class _AddDwellingInspectionScreenState
   final _locationFieldKey = GlobalKey<AppAutocompleteFieldState>();
   final _makeFieldKey = GlobalKey<AppAutocompleteFieldState>();
   final _modelFieldKey = GlobalKey<AppAutocompleteFieldState>();
+
+  final ScrollController _scrollController = ScrollController();
 
   final _locationController = TextEditingController();
   // final _floorController = TextEditingController(); // Removed
@@ -71,8 +73,14 @@ class _AddDwellingInspectionScreenState
   bool _heatingExpanded = true;
   bool _dhwExpanded = false;
 
-  int? _formId;
-  DwellingInspection? _existingItem;
+  Map<String, dynamic>? _assetsJson;
+  void Function(Map<String, dynamic> nextAssets)? _onAssetsChanged;
+
+  List<Map<String, dynamic>> _observationsJson = [];
+  void Function(List<Map<String, dynamic>> nextObservations)?
+  _onObservationsChanged;
+
+  Map<String, dynamic>? _existingItem;
   String? _condition;
   String? _operational; // Yes/No
 
@@ -100,6 +108,7 @@ class _AddDwellingInspectionScreenState
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _locationController.dispose();
     _makeController.dispose();
     _modelController.dispose();
@@ -120,227 +129,325 @@ class _AddDwellingInspectionScreenState
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_formId == null) {
-      final args =
-          ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-      if (args != null) {
-        _formId = args['formId'] as int?;
-        final item = args['inspection'] as DwellingInspection?;
-        if (item != null) {
-          _existingItem = item;
-          _locationController.text = item.location;
+    if (_assetsJson != null) return;
 
-          _heatingType = item.heatingType;
+    final args =
+        ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+    if (args == null) return;
 
-          const heatGens = [
-            'Boiler',
-            'ASHP',
-            'AC',
-            'Storage Heaters',
-            'Electric Blown',
-          ];
-          if (item.heatGeneratorType != null &&
-              item.heatGeneratorType!.isNotEmpty) {
-            final types = item.heatGeneratorType!.split(',');
-            _heatGeneratorTypes = [];
-            for (var t in types) {
-              final tr = t.trim();
-              if (heatGens.contains(tr)) {
-                _heatGeneratorTypes.add(tr);
-              } else {
-                _heatGeneratorTypes.add('Other');
-                _heatGeneratorOtherController.text =
-                    tr; // Assumes only one Other
-              }
-            }
-          }
+    final assets = args['assetsJson'];
+    final onAssetsChanged = args['onAssetsChanged'];
+    _assetsJson = assets is Map ? Map<String, dynamic>.from(assets) : null;
+    _onAssetsChanged = onAssetsChanged is Function
+        ? (onAssetsChanged as void Function(Map<String, dynamic>))
+        : null;
 
-          const fuels = ['Gas', 'Oil', 'LPG', 'Electric'];
-          if (item.heatGeneratorFuelType != null) {
-            if (fuels.contains(item.heatGeneratorFuelType)) {
-              _heatGeneratorFuelType = item.heatGeneratorFuelType;
-            } else {
-              _heatGeneratorFuelType = 'Other';
-              _heatGeneratorFuelOtherController.text =
-                  item.heatGeneratorFuelType!;
-            }
-          }
+    final obs = args['observationsJson'];
+    _observationsJson = obs is List
+        ? obs
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : <Map<String, dynamic>>[];
 
-          const heatDists = [
-            'Direct Connection',
-            'Plate Heat Exchanger',
-            'HIU',
-            'Unknown',
-          ];
-          if (item.heatDistributionType != null) {
-            if (heatDists.contains(item.heatDistributionType)) {
-              _heatDistributionType = item.heatDistributionType;
-            } else {
-              _heatDistributionType = 'Other';
-              _heatDistributionOtherController.text =
-                  item.heatDistributionType!;
-            }
-          }
+    final onObsChanged = args['onObservationsChanged'];
+    _onObservationsChanged = onObsChanged is Function
+        ? (onObsChanged as void Function(List<Map<String, dynamic>>))
+        : null;
 
-          _dhwType = item.dhwType;
+    final rawItem = args['inspection'];
+    final item = rawItem is Map ? Map<String, dynamic>.from(rawItem) : null;
+    if (item == null) return;
 
-          const dhwGens = ['Combi Boiler', 'DHW Heater', 'Immersian Heater'];
-          if (item.dhwGeneratorType != null) {
-            if (dhwGens.contains(item.dhwGeneratorType)) {
-              _dhwGeneratorType = item.dhwGeneratorType;
-            } else {
-              _dhwGeneratorType = 'Other';
-              _dhwGeneratorOtherController.text = item.dhwGeneratorType!;
-            }
-          }
+    _existingItem = item;
 
-          if (item.dhwGeneratorFuelType != null) {
-            if (fuels.contains(item.dhwGeneratorFuelType)) {
-              _dhwGeneratorFuelType = item.dhwGeneratorFuelType;
-            } else {
-              _dhwGeneratorFuelType = 'Other';
-              _dhwGeneratorFuelOtherController.text =
-                  item.dhwGeneratorFuelType!;
-            }
-          }
+    _locationController.text = (item['location'] ?? '').toString();
 
-          const dhwComs = [
-            'Direct Connection',
-            'Direct Connection (With Secondary Return)',
-            'Unvented Cylinder',
-            'Vented Cylinder',
-            'HIU',
-          ];
-          if (item.dhwCommunalType != null) {
-            if (dhwComs.contains(item.dhwCommunalType)) {
-              _dhwCommunalType = item.dhwCommunalType;
-            } else {
-              _dhwCommunalType = 'Other';
-              _dhwCommunalOtherController.text = item.dhwCommunalType!;
-            }
-          }
+    final heatingType = (item['heatingType'] ?? '').toString().trim();
+    _heatingType = heatingType.isEmpty ? null : heatingType;
 
-          _heatingMetered = item.heatingMetered;
-          _heatingSubMeterFeasible = item.heatingSubMeterFeasible;
-          _heatingSubMeterFeasibilityReason =
-              item.heatingSubMeterFeasibilityReason ?? '';
-          _heatingSubMeterEvidenceImages = item.heatingSubMeterEvidenceImages;
-
-          _heatingControls = List<String>.from(item.heatingControls);
-          _heatingControls = _heatingControls
-              .map((v) => v == 'Motorized valve' ? 'Motorized Valve' : v)
-              .toList();
-          _heatingControlsOtherController.text =
-              item.heatingControlsOther ?? '';
-          _heatingNotesController.text = item.heatingNotes ?? '';
-          _heatingImages = item.heatingImagePaths.map((p) => XFile(p)).toList();
-
-          _dhwMetered = item.dhwMetered;
-          _dhwSubMeterFeasible = item.dhwSubMeterFeasible;
-          _dhwSubMeterFeasibilityReason =
-              item.dhwSubMeterFeasibilityReason ?? '';
-          _dhwSubMeterEvidenceImages = item.dhwSubMeterEvidenceImages;
-
-          _dhwControls = List<String>.from(item.dhwControls);
-          _dhwControls = _dhwControls.map((v) {
-            switch (v) {
-              case 'Timeclock / programmer':
-                return 'Programmer';
-              case 'Cylinder thermostat':
-                return 'Cylinder/Water Heater Thermostat';
-              case 'Motorized valve':
-                return 'Motorized Valve';
-              default:
-                return v;
-            }
-          }).toList();
-
-          // Preserve any legacy/unknown options by moving them into Other.
-          final unknownDhwControls = _dhwControls
-              .where(
-                (v) =>
-                    !_dhwControlOptions.contains(v) &&
-                    v != 'Other' &&
-                    v != 'None',
-              )
-              .toList();
-          final savedOther = (item.dhwControlsOther ?? '').trim();
-          if (unknownDhwControls.isNotEmpty) {
-            _dhwControls.removeWhere(unknownDhwControls.contains);
-            if (!_dhwControls.contains('Other')) {
-              _dhwControls.add('Other');
-            }
-
-            final unknownAsText = unknownDhwControls.join(', ');
-            _dhwControlsOtherController.text = savedOther.isEmpty
-                ? unknownAsText
-                : '$savedOther, $unknownAsText';
-          } else {
-            _dhwControlsOtherController.text = savedOther;
-          }
-          _dhwNotesController.text = item.dhwNotes ?? '';
-          _dhwImages = item.dhwImagePaths.map((p) => XFile(p)).toList();
-
-          _makeController.text = item.hiuMake ?? '';
-          _modelController.text = item.hiuModel ?? '';
-          _serialNumberController.text = item.hiuSerialNumber ?? '';
-          _condition = item.condition;
-          _operational = item.operational;
-          _images = item.imagePaths.map((path) => XFile(path)).toList();
-          _loadObservationCount();
+    const heatGens = [
+      'Boiler',
+      'ASHP',
+      'AC',
+      'Storage Heaters',
+      'Electric Blown',
+    ];
+    final heatGeneratorType = (item['heatGeneratorType'] ?? '').toString();
+    if (heatGeneratorType.trim().isNotEmpty) {
+      final types = heatGeneratorType.split(',');
+      _heatGeneratorTypes = [];
+      for (var t in types) {
+        final tr = t.trim();
+        if (heatGens.contains(tr)) {
+          _heatGeneratorTypes.add(tr);
+        } else {
+          _heatGeneratorTypes.add('Other');
+          _heatGeneratorOtherController.text = tr; // Assumes only one Other
         }
       }
     }
+
+    const fuels = ['Gas', 'Oil', 'LPG', 'Electric'];
+    final heatFuel = (item['heatGeneratorFuelType'] ?? '').toString().trim();
+    if (heatFuel.isNotEmpty) {
+      if (fuels.contains(heatFuel)) {
+        _heatGeneratorFuelType = heatFuel;
+      } else {
+        _heatGeneratorFuelType = 'Other';
+        _heatGeneratorFuelOtherController.text = heatFuel;
+      }
+    }
+
+    const heatDists = [
+      'Direct Connection',
+      'Plate Heat Exchanger',
+      'HIU',
+      'Unknown',
+    ];
+    final heatDist = (item['heatDistributionType'] ?? '').toString().trim();
+    if (heatDist.isNotEmpty) {
+      if (heatDists.contains(heatDist)) {
+        _heatDistributionType = heatDist;
+      } else {
+        _heatDistributionType = 'Other';
+        _heatDistributionOtherController.text = heatDist;
+      }
+    }
+
+    final dhwType = (item['dhwType'] ?? '').toString().trim();
+    _dhwType = dhwType.isEmpty ? null : dhwType;
+
+    const dhwGens = ['Combi Boiler', 'DHW Heater', 'Immersian Heater'];
+    final dhwGen = (item['dhwGeneratorType'] ?? '').toString().trim();
+    if (dhwGen.isNotEmpty) {
+      if (dhwGens.contains(dhwGen)) {
+        _dhwGeneratorType = dhwGen;
+      } else {
+        _dhwGeneratorType = 'Other';
+        _dhwGeneratorOtherController.text = dhwGen;
+      }
+    }
+
+    final dhwFuel = (item['dhwGeneratorFuelType'] ?? '').toString().trim();
+    if (dhwFuel.isNotEmpty) {
+      if (fuels.contains(dhwFuel)) {
+        _dhwGeneratorFuelType = dhwFuel;
+      } else {
+        _dhwGeneratorFuelType = 'Other';
+        _dhwGeneratorFuelOtherController.text = dhwFuel;
+      }
+    }
+
+    const dhwComs = [
+      'Direct Connection',
+      'Direct Connection (With Secondary Return)',
+      'Unvented Cylinder',
+      'Vented Cylinder',
+      'HIU',
+    ];
+    final dhwCom = (item['dhwCommunalType'] ?? '').toString().trim();
+    if (dhwCom.isNotEmpty) {
+      if (dhwComs.contains(dhwCom)) {
+        _dhwCommunalType = dhwCom;
+      } else {
+        _dhwCommunalType = 'Other';
+        _dhwCommunalOtherController.text = dhwCom;
+      }
+    }
+
+    final heatingMetered = (item['heatingMetered'] ?? '').toString().trim();
+    _heatingMetered = heatingMetered.isEmpty ? null : heatingMetered;
+    final heatingFeasible = (item['heatingSubMeterFeasible'] ?? '')
+        .toString()
+        .trim();
+    _heatingSubMeterFeasible = heatingFeasible.isEmpty ? null : heatingFeasible;
+    _heatingSubMeterFeasibilityReason =
+        (item['heatingSubMeterFeasibilityReason'] ?? '').toString();
+    final heatingEvidence = item['heatingSubMeterEvidenceImages'];
+    _heatingSubMeterEvidenceImages = heatingEvidence is List
+        ? heatingEvidence
+              .where((e) => e != null)
+              .map((e) => e.toString())
+              .toList(growable: true)
+        : <String>[];
+
+    final heatingControlsRaw = item['heatingControls'];
+    _heatingControls = heatingControlsRaw is List
+        ? heatingControlsRaw
+              .where((e) => e != null)
+              .map((e) => e.toString())
+              .toList(growable: true)
+        : <String>[];
+    _heatingControls = _heatingControls
+        .map((v) => v == 'Motorized valve' ? 'Motorized Valve' : v)
+        .toList();
+    _heatingControlsOtherController.text = (item['heatingControlsOther'] ?? '')
+        .toString();
+    _heatingNotesController.text = (item['heatingNotes'] ?? '').toString();
+    final heatingImagePathsRaw = item['heatingImagePaths'];
+    final heatingImagePaths = heatingImagePathsRaw is List
+        ? heatingImagePathsRaw
+              .where((e) => e != null)
+              .map((e) => e.toString())
+              .toList(growable: false)
+        : const <String>[];
+    _heatingImages = heatingImagePaths.map((p) => XFile(p)).toList();
+
+    final dhwMetered = (item['dhwMetered'] ?? '').toString().trim();
+    _dhwMetered = dhwMetered.isEmpty ? null : dhwMetered;
+    final dhwFeasible = (item['dhwSubMeterFeasible'] ?? '').toString().trim();
+    _dhwSubMeterFeasible = dhwFeasible.isEmpty ? null : dhwFeasible;
+    _dhwSubMeterFeasibilityReason = (item['dhwSubMeterFeasibilityReason'] ?? '')
+        .toString();
+    final dhwEvidence = item['dhwSubMeterEvidenceImages'];
+    _dhwSubMeterEvidenceImages = dhwEvidence is List
+        ? dhwEvidence
+              .where((e) => e != null)
+              .map((e) => e.toString())
+              .toList(growable: true)
+        : <String>[];
+
+    final dhwControlsRaw = item['dhwControls'];
+    _dhwControls = dhwControlsRaw is List
+        ? dhwControlsRaw
+              .where((e) => e != null)
+              .map((e) => e.toString())
+              .toList(growable: true)
+        : <String>[];
+    _dhwControls = _dhwControls.map((v) {
+      switch (v) {
+        case 'Timeclock / programmer':
+          return 'Programmer';
+        case 'Cylinder thermostat':
+          return 'Cylinder/Water Heater Thermostat';
+        case 'Motorized valve':
+          return 'Motorized Valve';
+        default:
+          return v;
+      }
+    }).toList();
+
+    final unknownDhwControls = _dhwControls
+        .where(
+          (v) => !_dhwControlOptions.contains(v) && v != 'Other' && v != 'None',
+        )
+        .toList();
+    final savedOther = (item['dhwControlsOther'] ?? '').toString().trim();
+    if (unknownDhwControls.isNotEmpty) {
+      _dhwControls.removeWhere(unknownDhwControls.contains);
+      if (!_dhwControls.contains('Other')) {
+        _dhwControls.add('Other');
+      }
+
+      final unknownAsText = unknownDhwControls.join(', ');
+      _dhwControlsOtherController.text = savedOther.isEmpty
+          ? unknownAsText
+          : '$savedOther, $unknownAsText';
+    } else {
+      _dhwControlsOtherController.text = savedOther;
+    }
+    _dhwNotesController.text = (item['dhwNotes'] ?? '').toString();
+    final dhwImagePathsRaw = item['dhwImagePaths'];
+    final dhwImagePaths = dhwImagePathsRaw is List
+        ? dhwImagePathsRaw
+              .where((e) => e != null)
+              .map((e) => e.toString())
+              .toList(growable: false)
+        : const <String>[];
+    _dhwImages = dhwImagePaths.map((p) => XFile(p)).toList();
+
+    _makeController.text = (item['hiuMake'] ?? '').toString();
+    _modelController.text = (item['hiuModel'] ?? '').toString();
+    _serialNumberController.text = (item['hiuSerialNumber'] ?? '').toString();
+    final cond = (item['condition'] ?? '').toString().trim();
+    _condition = cond.isEmpty ? null : cond;
+    final op = (item['operational'] ?? '').toString().trim();
+    _operational = op.isEmpty ? null : op;
+    final imgRaw = item['imagePaths'];
+    final imgPaths = imgRaw is List
+        ? imgRaw
+              .where((e) => e != null)
+              .map((e) => e.toString())
+              .toList(growable: false)
+        : const <String>[];
+    _images = imgPaths.map((path) => XFile(path)).toList();
+
+    _updateObservationCount();
   }
 
-  Future<void> _loadObservationCount() async {
-    if (_existingItem?.id == null) return;
-    final id = _existingItem!.id!;
-    final db = DatabaseHelper.instance;
-    final observations = await db.getQuestionObservations(
-      _formId!,
-      'dwelling_$id',
-    );
+  void _emitAssets(Map<String, dynamic> nextAssets) {
+    final onAssetsChanged = _onAssetsChanged;
+    if (onAssetsChanged == null) return;
+    _assetsJson = nextAssets;
+    onAssetsChanged(nextAssets);
+  }
 
-    setState(() {
-      _observationCount = observations.length;
-    });
+  void _emitObservations(List<Map<String, dynamic>> next) {
+    final onObsChanged = _onObservationsChanged;
+    _observationsJson = next;
+    if (onObsChanged != null) {
+      onObsChanged(next);
+    }
+  }
+
+  void _updateObservationCount() {
+    final id = (_existingItem?['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
+
+    final ref = 'dwelling_$id';
+    final count = _observationsJson.where((o) {
+      final oRef = (o['questionReference'] ?? o['question_reference'] ?? '')
+          .toString()
+          .trim();
+      return oRef == ref;
+    }).length;
+
+    if (!mounted) return;
+    setState(() => _observationCount = count);
   }
 
   Future<void> _viewObservations() async {
-    if (_existingItem == null || _existingItem!.id == null) {
-      final success = await _saveInternal();
-      if (!success) return;
+    final id = (_existingItem?['id'] ?? '').toString().trim();
+    if (id.isEmpty) {
+      final saved = await _saveInternal();
+      if (saved == null) return;
     }
 
     if (!mounted) return;
-    if (_existingItem?.id == null) return;
 
-    final id = _existingItem!.id!;
-    final ref = 'dwelling_$id';
+    final nextId = (_existingItem?['id'] ?? '').toString().trim();
+    if (nextId.isEmpty) return;
+
+    final ref = 'dwelling_$nextId';
     final makeModel = '${_makeController.text} ${_modelController.text}'.trim();
 
-    await Navigator.pushNamed(
+    await Navigator.push(
       context,
-      '/observations-list',
-      arguments: {
-        'formId': _formId,
-        'questionReference': ref,
-        'questionText':
-            '${_locationController.text}${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
-        'sectionName': 'Dwelling Inspections',
-        'assetId': id,
-        'assetType': 'Dwelling Inspection',
-        'assetMakeModel': makeModel.isEmpty ? null : makeModel,
-      },
+      MaterialPageRoute(
+        builder: (context) => HnaObservationsListScreen(
+          observationsJson: _observationsJson,
+          onObservationsChanged: (next) {
+            _emitObservations(next);
+          },
+          questionReference: ref,
+          questionText:
+              '${_locationController.text}${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
+          sectionName: 'Dwelling Inspections',
+          assetId: nextId,
+          assetType: 'Dwelling Inspection',
+          assetMakeModel: makeModel.isEmpty ? null : makeModel,
+        ),
+      ),
     );
-    _loadObservationCount();
+
+    _updateObservationCount();
   }
 
   Future<void> _saveAndClose() async {
-    final success = await _saveInternal();
-    if (success && mounted) {
-      Navigator.pop(context);
+    final saved = await _saveInternal();
+    if (saved != null && mounted) {
+      Navigator.pop(context, saved);
     }
   }
 
@@ -527,8 +634,8 @@ class _AddDwellingInspectionScreenState
             padding: const EdgeInsets.only(top: 8),
             child: ElevatedButton.icon(
               onPressed: () => _navigateToAddMeter('Heating Meter'),
-              icon: const Icon(Icons.add),
-              label: const Text('Add Heat Meter'),
+              icon: const Icon(Icons.gas_meter_outlined),
+              label: const Text('Manage Heat Meters'),
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size(double.infinity, 48),
               ),
@@ -595,8 +702,8 @@ class _AddDwellingInspectionScreenState
             padding: const EdgeInsets.only(top: 8),
             child: ElevatedButton.icon(
               onPressed: () => _navigateToAddMeter('DHW Meter'),
-              icon: const Icon(Icons.add),
-              label: const Text('Add Heat Meter'),
+              icon: const Icon(Icons.gas_meter_outlined),
+              label: const Text('Manage Heat Meters'),
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size(double.infinity, 48),
               ),
@@ -713,8 +820,14 @@ class _AddDwellingInspectionScreenState
     );
   }
 
-  Future<bool> _saveInternal() async {
-    if (!_formKey.currentState!.validate()) return false;
+  Future<Map<String, dynamic>?> _saveInternal() async {
+    if (!FormValidationFeedback.validate(
+      context,
+      _formKey,
+      scrollController: _scrollController,
+    )) {
+      return null;
+    }
 
     setState(() => _isLoading = true);
 
@@ -723,34 +836,15 @@ class _AddDwellingInspectionScreenState
       await _makeFieldKey.currentState?.saveSuggestion();
       await _modelFieldKey.currentState?.saveSuggestion();
 
-      Future<List<String>> persistImages(
-        List<XFile> images, {
-        required String prefix,
-      }) async {
-        final List<String> paths = [];
-        final appDir = await getApplicationDocumentsDirectory();
-
-        for (final image in images) {
-          final path = image.path;
-          if (path.startsWith(appDir.path)) {
-            paths.add(path);
-          } else {
-            final fileName =
-                '${prefix}_${DateTime.now().millisecondsSinceEpoch}_${paths.length}.jpg';
-            final savedImage = File('${appDir.path}/$fileName');
-            await File(path).copy(savedImage.path);
-            paths.add(savedImage.path);
-          }
-        }
-        return paths;
-      }
-
-      final imagePaths = await persistImages(_images, prefix: 'dwelling');
-      final heatingImagePaths = await persistImages(
+      final imagePaths = await persistPickedImagePaths(
+        _images,
+        prefix: 'dwelling',
+      );
+      final heatingImagePaths = await persistPickedImagePaths(
         _heatingImages,
         prefix: 'dwelling_heating',
       );
-      final dhwImagePaths = await persistImages(
+      final dhwImagePaths = await persistPickedImagePaths(
         _dhwImages,
         prefix: 'dwelling_dhw',
       );
@@ -846,116 +940,110 @@ class _AddDwellingInspectionScreenState
       bool hasHiu =
           (_heatDistributionType == 'HIU') || (_dhwCommunalType == 'HIU');
 
-      final item = DwellingInspection(
-        id: _existingItem?.id,
-        formId: _formId!,
-        location: toCamelCase(_locationController.text.trim()),
-        heatingType: heatingType,
-        heatGeneratorType: heatGeneratorType,
-        heatGeneratorFuelType: heatGeneratorFuelType,
-        heatDistributionType: heatDistributionType,
-        dhwType: dhwType,
-        dhwGeneratorType: dhwGeneratorType,
-        dhwGeneratorFuelType: dhwGeneratorFuelType,
-        dhwCommunalType: dhwCommunalType,
-        heatingMetered: _heatingMetered,
-        heatingSubMeterFeasible: _heatingSubMeterFeasible,
-        heatingSubMeterFeasibilityReason: _heatingSubMeterFeasible == 'Yes'
+      final now = DateTime.now().toUtc();
+      final existingId = (_existingItem?['id'] ?? '').toString().trim();
+      final id = existingId.isEmpty ? const Uuid().v4() : existingId;
+      final existingCreatedAt = (_existingItem?['createdAt'] ?? '')
+          .toString()
+          .trim();
+      final createdAt = existingId.isEmpty
+          ? now.toIso8601String()
+          : (existingCreatedAt.isEmpty
+                ? now.toIso8601String()
+                : existingCreatedAt);
+
+      final saved = <String, dynamic>{
+        'id': id,
+        'location': toCamelCase(_locationController.text.trim()),
+        'heatingType': heatingType,
+        'heatGeneratorType': heatGeneratorType,
+        'heatGeneratorFuelType': heatGeneratorFuelType,
+        'heatDistributionType': heatDistributionType,
+        'dhwType': dhwType,
+        'dhwGeneratorType': dhwGeneratorType,
+        'dhwGeneratorFuelType': dhwGeneratorFuelType,
+        'dhwCommunalType': dhwCommunalType,
+        'heatingMetered': _heatingMetered,
+        'heatingSubMeterFeasible': _heatingSubMeterFeasible,
+        'heatingSubMeterFeasibilityReason': _heatingSubMeterFeasible == 'Yes'
             ? null
             : _heatingSubMeterFeasibilityReason,
-        heatingSubMeterEvidenceImages: _heatingSubMeterEvidenceImages,
-        dhwMetered: _dhwMetered,
-        dhwSubMeterFeasible: _dhwSubMeterFeasible,
-        dhwSubMeterFeasibilityReason: _dhwSubMeterFeasible == 'Yes'
+        'heatingSubMeterEvidenceImages': List<String>.from(
+          _heatingSubMeterEvidenceImages,
+        ),
+        'dhwMetered': _dhwMetered,
+        'dhwSubMeterFeasible': _dhwSubMeterFeasible,
+        'dhwSubMeterFeasibilityReason': _dhwSubMeterFeasible == 'Yes'
             ? null
             : _dhwSubMeterFeasibilityReason,
-        dhwSubMeterEvidenceImages: _dhwSubMeterEvidenceImages,
-
-        heatingControls: _heatingControls,
-        heatingControlsOther:
+        'dhwSubMeterEvidenceImages': List<String>.from(
+          _dhwSubMeterEvidenceImages,
+        ),
+        'heatingControls': List<String>.from(_heatingControls),
+        'heatingControlsOther':
             _heatingControlsOtherController.text.trim().isEmpty
             ? null
             : _heatingControlsOtherController.text.trim(),
-        heatingNotes: _heatingNotesController.text.trim().isEmpty
+        'heatingNotes': _heatingNotesController.text.trim().isEmpty
             ? null
             : _heatingNotesController.text.trim(),
-        heatingImagePaths: heatingImagePaths,
-        dhwControls: _dhwControls,
-        dhwControlsOther: _dhwControlsOtherController.text.trim().isEmpty
+        'heatingImagePaths': heatingImagePaths,
+        'dhwControls': List<String>.from(_dhwControls),
+        'dhwControlsOther': _dhwControlsOtherController.text.trim().isEmpty
             ? null
             : _dhwControlsOtherController.text.trim(),
-        dhwNotes: _dhwNotesController.text.trim().isEmpty
+        'dhwNotes': _dhwNotesController.text.trim().isEmpty
             ? null
             : _dhwNotesController.text.trim(),
-        dhwImagePaths: dhwImagePaths,
-
-        hiuMake: hasHiu ? toCamelCase(_makeController.text.trim()) : null,
-        hiuModel: hasHiu
+        'dhwImagePaths': dhwImagePaths,
+        'hiuMake': hasHiu ? toCamelCase(_makeController.text.trim()) : null,
+        'hiuModel': hasHiu
             ? (_modelController.text.trim().isNotEmpty
                   ? _modelController.text.trim()
                   : null)
             : null,
-        hiuSerialNumber: hasHiu
+        'hiuSerialNumber': hasHiu
             ? (_serialNumberController.text.trim().isEmpty
                   ? null
                   : _serialNumberController.text.trim())
             : null,
-        condition: _condition,
-        operational: _operational,
-        imagePaths: imagePaths,
-        createdAt: _existingItem?.createdAt,
-        updatedAt: DateTime.now(),
-      );
+        'condition': _condition,
+        'operational': _operational,
+        'imagePaths': imagePaths,
+        'createdAt': createdAt,
+        'updatedAt': now.toIso8601String(),
+      };
 
-      final savedId = await DatabaseHelper.instance.saveDwellingInspection(
-        item,
-      );
+      final assets = _assetsJson;
+      if (assets != null) {
+        final raw = assets['dwellingInspections'];
+        final items = raw is List
+            ? raw
+                  .whereType<Map>()
+                  .map((e) => Map<String, dynamic>.from(e))
+                  .toList(growable: true)
+            : <Map<String, dynamic>>[];
 
+        final idx = items.indexWhere((m) => (m['id'] ?? '').toString() == id);
+        if (idx >= 0) {
+          items[idx] = saved;
+        } else {
+          items.add(saved);
+        }
+
+        final nextAssets = Map<String, dynamic>.from(assets);
+        nextAssets['dwellingInspections'] = items;
+        _emitAssets(nextAssets);
+      }
+
+      if (!mounted) return saved;
       setState(() {
-        _existingItem = DwellingInspection(
-          id: savedId,
-          formId: item.formId,
-          location: item.location,
-          heatingType: item.heatingType,
-          heatGeneratorType: item.heatGeneratorType,
-          heatGeneratorFuelType: item.heatGeneratorFuelType,
-          heatDistributionType: item.heatDistributionType,
-          dhwType: item.dhwType,
-          dhwGeneratorType: item.dhwGeneratorType,
-          dhwGeneratorFuelType: item.dhwGeneratorFuelType,
-          dhwCommunalType: item.dhwCommunalType,
-          heatingMetered: item.heatingMetered,
-          heatingSubMeterFeasible: item.heatingSubMeterFeasible,
-          heatingSubMeterFeasibilityReason:
-              item.heatingSubMeterFeasibilityReason,
-          heatingSubMeterEvidenceImages: item.heatingSubMeterEvidenceImages,
-          dhwMetered: item.dhwMetered,
-          dhwSubMeterFeasible: item.dhwSubMeterFeasible,
-          dhwSubMeterFeasibilityReason: item.dhwSubMeterFeasibilityReason,
-          dhwSubMeterEvidenceImages: item.dhwSubMeterEvidenceImages,
-
-          heatingControls: item.heatingControls,
-          heatingControlsOther: item.heatingControlsOther,
-          heatingNotes: item.heatingNotes,
-          heatingImagePaths: item.heatingImagePaths,
-          dhwControls: item.dhwControls,
-          dhwControlsOther: item.dhwControlsOther,
-          dhwNotes: item.dhwNotes,
-          dhwImagePaths: item.dhwImagePaths,
-
-          hiuMake: item.hiuMake,
-          hiuModel: item.hiuModel,
-          hiuSerialNumber: item.hiuSerialNumber,
-          condition: item.condition,
-          operational: item.operational,
-          imagePaths: item.imagePaths,
-          createdAt: item.createdAt,
-          updatedAt: item.updatedAt,
-        );
+        _existingItem = saved;
         _isLoading = false;
       });
+      _updateObservationCount();
 
-      return true;
+      return saved;
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -963,7 +1051,7 @@ class _AddDwellingInspectionScreenState
           context,
         ).showSnackBar(SnackBar(content: Text('Error saving inspection: $e')));
       }
-      return false;
+      return null;
     }
   }
 
@@ -1002,18 +1090,38 @@ class _AddDwellingInspectionScreenState
     }
   }
 
-  void _navigateToAddMeter(String meterType) {
-    if (_formId == null) return;
+  Future<void> _navigateToAddMeter(String meterType) async {
+    final assets = _assetsJson;
+    if (assets == null) return;
 
-    Navigator.push(
+    // Ensure the dwelling inspection exists so we have a stable id to link meters.
+    final existingId = (_existingItem?['id'] ?? '').toString().trim();
+    if (existingId.isEmpty) {
+      final saved = await _saveInternal();
+      if (saved == null || !mounted) return;
+    }
+
+    final dwellingId = (_existingItem?['id'] ?? '').toString().trim();
+    if (dwellingId.isEmpty) return;
+
+    await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => const AddHeatMeterScreen(),
+        builder: (context) => const MeterListScreen(),
         settings: RouteSettings(
           arguments: {
-            'formId': _formId,
-            'meterType': meterType,
-            'initialLocation': _locationController.text,
+            'formId': null,
+            'networkType': meterType,
+            'relatedAssetType': 'Dwelling Inspection',
+            'relatedAssetId': dwellingId,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': (Map<String, dynamic> nextAssets) {
+              _emitAssets(nextAssets);
+            },
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': (List<Map<String, dynamic>> next) {
+              _emitObservations(next);
+            },
           },
         ),
       ),
@@ -1030,6 +1138,7 @@ class _AddDwellingInspectionScreenState
         children: [
           Expanded(
             child: SingleChildScrollView(
+              controller: _scrollController,
               padding: const EdgeInsets.all(16),
               child: Form(
                 key: _formKey,

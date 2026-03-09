@@ -44,6 +44,10 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Android release signing (never commit)
+android/key.properties
+**/*.jks
+
 # Local environment/config (do not commit real secrets)
 env/*.env
 env/*.json
@@ -52,4 +56,5 @@ env/*.json
 # Root defines file (preferred for VS Code launch)
 auditpromobile.defines.json
 !auditpromobile.defines.example.json
+
 

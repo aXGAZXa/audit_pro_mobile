@@ -2,16 +2,29 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'dart:convert';
 
+import 'package:uuid/uuid.dart';
+
 import '../../services/portal_api_client.dart';
 import 'hna_web_editor_form_screen.dart';
+import 'services/hna_web_editor_attachment_context.dart';
+import 'services/hna_derived_metrics_calculator.dart';
+import 'services/hna_pdf_derived_calculator.dart';
+import 'services/hna_pdf_model_builder.dart';
+import 'services/hna_submission_payload_builder.dart';
 import 'services/hna_web_editor_service.dart';
 import 'services/web_editor_return.dart';
 
 class HnaWebEditorScreen extends StatefulWidget {
-  const HnaWebEditorScreen({super.key, required this.ticket, this.returnUrl});
+  const HnaWebEditorScreen({
+    super.key,
+    required this.ticket,
+    this.returnUrl,
+    this.mode,
+  });
 
   final String ticket;
   final String? returnUrl;
+  final String? mode;
 
   @override
   State<HnaWebEditorScreen> createState() => _HnaWebEditorScreenState();
@@ -23,10 +36,11 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
 
   Map<String, dynamic>? _session;
   Map<String, dynamic>? _submission;
-  List<String>? _clients;
 
   late final HnaWebEditorService _service;
   String? _returnUrl;
+
+  bool get _isAutoResubmit => (widget.mode ?? '').trim() == 'auto-resubmit';
 
   @override
   void initState() {
@@ -115,7 +129,10 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
     try {
       final session = await _service.getSession(ticket: widget.ticket);
       final submission = await _service.getSubmission(ticket: widget.ticket);
-      final clients = await _service.getClients(ticket: widget.ticket);
+
+      final clients = _isAutoResubmit
+          ? const <String>[]
+          : await _service.getClients(ticket: widget.ticket);
 
       final payloadJson =
           (submission['payloadJson'] ?? submission['PayloadJson'] ?? '')
@@ -131,6 +148,11 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
       }
       final payload = Map<String, dynamic>.from(decoded);
 
+      final submissionId =
+          (submission['submissionId'] ?? submission['SubmissionId'] ?? '')
+              .toString()
+              .trim();
+
       final hnaRaw = payload['hna'];
       final hna = hnaRaw is Map
           ? Map<String, dynamic>.from(hnaRaw)
@@ -140,10 +162,22 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
           ? Map<String, dynamic>.from(formDataRaw)
           : <String, dynamic>{};
 
-      final submissionId =
-          (submission['submissionId'] ?? submission['SubmissionId'] ?? '')
-              .toString()
-              .trim();
+      final attachmentsRaw = hna['attachments'];
+      final attachments = <Map<String, dynamic>>[];
+      if (attachmentsRaw is List) {
+        for (final item in attachmentsRaw) {
+          if (item is Map) {
+            attachments.add(Map<String, dynamic>.from(item));
+          }
+        }
+      }
+
+      HnaWebEditorAttachmentContext.instance.configure(
+        service: _service,
+        ticket: widget.ticket,
+        submissionId: submissionId,
+        initialAttachments: attachments,
+      );
       final schemaVersionRaw =
           (submission['schemaVersion'] ?? submission['SchemaVersion']);
       final schemaVersion = schemaVersionRaw is int
@@ -160,9 +194,18 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
       setState(() {
         _session = session;
         _submission = submission;
-        _clients = clients;
         _loading = false;
       });
+
+      if (_isAutoResubmit) {
+        await _runAutoResubmit(
+          payload: payload,
+          formData: formData,
+          schemaVersion: schemaVersion,
+          submittedAtUtc: submittedAtUtc,
+        );
+        return;
+      }
 
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
@@ -186,7 +229,258 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
         _error = e.toString();
         _loading = false;
       });
+
+      if (kIsWeb && _isAutoResubmit) {
+        WebEditorReturn.notifyParentError(
+          ticket: widget.ticket,
+          message: e.toString(),
+        );
+      }
     }
+  }
+
+  Future<void> _runAutoResubmit({
+    required Map<String, dynamic> payload,
+    required Map<String, dynamic> formData,
+    required int? schemaVersion,
+    required DateTime? submittedAtUtc,
+  }) async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final updatedPayload = _buildUpdatedPayload(
+        originalPayload: payload,
+        formData: formData,
+        schemaVersion: schemaVersion,
+        submittedAtUtc: submittedAtUtc,
+      );
+
+      final payloadJson = jsonEncode(_makeJsonEncodable(updatedPayload));
+      await _service.updateSubmission(
+        ticket: widget.ticket,
+        payloadJson: payloadJson,
+        generatePdf: true,
+      );
+
+      if (kIsWeb) {
+        WebEditorReturn.notifyParentComplete(
+          ticket: widget.ticket,
+          returnUrl: _returnUrl,
+        );
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = null;
+      });
+    } catch (e) {
+      if (kIsWeb) {
+        WebEditorReturn.notifyParentError(
+          ticket: widget.ticket,
+          message: e.toString(),
+        );
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  dynamic _makeJsonEncodable(dynamic value) {
+    if (value == null) return null;
+    if (value is DateTime) return value.toIso8601String();
+    if (value is num || value is String || value is bool) return value;
+    if (value is List) return value.map(_makeJsonEncodable).toList();
+    if (value is Map) {
+      return value.map((k, v) => MapEntry(k.toString(), _makeJsonEncodable(v)));
+    }
+    return value.toString();
+  }
+
+  Map<String, dynamic> _buildUpdatedPayload({
+    required Map<String, dynamic> originalPayload,
+    required Map<String, dynamic> formData,
+    required int? schemaVersion,
+    required DateTime? submittedAtUtc,
+  }) {
+    final out = Map<String, dynamic>.from(originalPayload);
+
+    final rawHna = out['hna'];
+    final hna = rawHna is Map
+        ? Map<String, dynamic>.from(rawHna)
+        : <String, dynamic>{};
+
+    final formDataOut = Map<String, dynamic>.from(formData);
+
+    _ensureV4Envelope(
+      out: out,
+      hna: hna,
+      formData: formDataOut,
+      submittedAtUtc: submittedAtUtc,
+    );
+
+    final assets = hna['assets'];
+    final observations = hna['observations'];
+    final unsafe = hna['unsafe'];
+    final attachments = hna['attachments'];
+    final summary = hna['summary'];
+
+    final existingDerived = formDataOut['derivedMetrics'];
+    final existingMethodology = existingDerived is Map
+        ? existingDerived['methodologyVersion']
+        : null;
+    final methodologyVersion = (existingMethodology ?? 'v1').toString();
+
+    formDataOut['derivedMetrics'] =
+        HnaDerivedMetricsCalculator.computeFromPayload(
+          formData: formDataOut,
+          assetsJson: assets is Map ? Map<String, dynamic>.from(assets) : null,
+          observationsJson: observations is List
+              ? List<dynamic>.from(observations)
+              : null,
+          unsafeJson: unsafe is Map ? Map<String, dynamic>.from(unsafe) : null,
+          methodologyVersion: methodologyVersion,
+        );
+
+    if (assets is Map) {
+      final pdfDerivedExisting = formDataOut['pdfDerived'];
+      final pdfDerivedMethodology = pdfDerivedExisting is Map
+          ? pdfDerivedExisting['methodologyVersion']
+          : null;
+      final pdfMethodologyVersion =
+          (pdfDerivedMethodology ?? methodologyVersion).toString();
+
+      formDataOut['pdfDerived'] = HnaPdfDerivedCalculator.computeFromPayload(
+        formData: formDataOut,
+        assetsJson: Map<String, dynamic>.from(assets),
+        observationsJson: observations is List
+            ? List<dynamic>.from(observations)
+            : null,
+        methodologyVersion: pdfMethodologyVersion,
+      );
+    }
+
+    final reportNumber = _tryReadReportNumber(
+      summary: summary,
+      existingPdfModel: hna['pdfModel'],
+    );
+    if (reportNumber != null &&
+        reportNumber.trim().isNotEmpty &&
+        assets is Map) {
+      final assetsMap = Map<String, dynamic>.from(assets);
+      final unsafeObservationsJson = _tryReadMapList(
+        unsafe is Map ? unsafe['unsafeObservations'] : null,
+      );
+      final unsafeReportsJson = _tryReadMapList(
+        unsafe is Map ? unsafe['unsafeReports'] : null,
+      );
+      final attachmentsJson = _tryReadMapList(attachments);
+      final observationsJson = _tryReadMapList(observations);
+
+      hna['pdfModel'] = HnaPdfModelBuilder.build(
+        formId: 0,
+        reportNumber: reportNumber,
+        formData: formDataOut,
+        assetsJson: assetsMap,
+        observationsJson: observationsJson,
+        unsafeObservationsJson: unsafeObservationsJson,
+        unsafeReportsJson: unsafeReportsJson,
+        attachments: attachmentsJson,
+      );
+    }
+
+    hna['formData'] = formDataOut;
+    out['hna'] = hna;
+
+    return out;
+  }
+
+  void _ensureV4Envelope({
+    required Map<String, dynamic> out,
+    required Map<String, dynamic> hna,
+    required Map<String, dynamic> formData,
+    required DateTime? submittedAtUtc,
+  }) {
+    out['payloadSchemaVersion'] =
+        HnaSubmissionPayloadBuilder.payloadSchemaVersion;
+
+    final rawForm = out['form'];
+    final form = rawForm is Map
+        ? Map<String, dynamic>.from(rawForm)
+        : <String, dynamic>{};
+
+    final rawSummary = hna['summary'];
+    final summary = rawSummary is Map
+        ? Map<String, dynamic>.from(rawSummary)
+        : <String, dynamic>{};
+
+    var formUuid = (form['uuid'] ?? '').toString().trim();
+    if (formUuid.isEmpty) {
+      final fromSummary = (summary['formUuid'] ?? '').toString().trim();
+      formUuid = fromSummary.isNotEmpty ? fromSummary : const Uuid().v4();
+      form['uuid'] = formUuid;
+    }
+
+    final submittedAt = (submittedAtUtc ?? DateTime.now()).toUtc();
+    final existingFriendlyRef = (summary['friendlyRef'] ?? '')
+        .toString()
+        .trim();
+    final friendlyRef = existingFriendlyRef.isNotEmpty
+        ? existingFriendlyRef
+        : HnaSubmissionPayloadBuilder.buildFriendlyRef(
+            submittedAt: submittedAt,
+            formUuid: formUuid,
+          );
+
+    summary['assessorName'] =
+        (formData['auditorName'] ?? formData['assessorName'] ?? '').toString();
+    summary['clientName'] = (formData['client'] ?? '').toString();
+    summary['auditDate'] = (formData['auditDate'] ?? '').toString();
+    summary['submittedAt'] =
+        (summary['submittedAt'] ?? submittedAt.toIso8601String()).toString();
+    summary['friendlyRef'] = friendlyRef;
+    summary['formUuid'] = formUuid;
+    summary['formId'] = form['id'] ?? summary['formId'] ?? 0;
+
+    hna['summary'] = summary;
+    out['form'] = form;
+  }
+
+  String? _tryReadReportNumber({
+    required dynamic summary,
+    required dynamic existingPdfModel,
+  }) {
+    if (summary is Map) {
+      final friendlyRef = (summary['friendlyRef'] ?? '').toString().trim();
+      if (friendlyRef.isNotEmpty) return friendlyRef;
+    }
+
+    if (existingPdfModel is Map) {
+      final reportNumber = (existingPdfModel['ReportNumber'] ?? '')
+          .toString()
+          .trim();
+      if (reportNumber.isNotEmpty) return reportNumber;
+    }
+
+    return null;
+  }
+
+  List<Map<String, dynamic>> _tryReadMapList(dynamic raw) {
+    if (raw is! List) return const <Map<String, dynamic>>[];
+    final out = <Map<String, dynamic>>[];
+    for (final item in raw) {
+      if (item is Map) {
+        out.add(Map<String, dynamic>.from(item));
+      }
+    }
+    return out;
   }
 
   @override
@@ -208,7 +502,10 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
                     ),
                     const SizedBox(height: 12),
                   ],
-                  _MetaRow(session: _session, submission: _submission),
+                  if (!_isAutoResubmit)
+                    _MetaRow(session: _session, submission: _submission)
+                  else
+                    const Text('Recomputing metrics...'),
                 ],
               ),
       ),

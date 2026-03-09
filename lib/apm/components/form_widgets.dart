@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
@@ -7,29 +8,90 @@ import 'dart:io';
 
 import 'package:signature/signature.dart';
 
-Future<XFile> _persistXFileToDocuments(
-  XFile source, {
-  required String prefix,
-  String? suffix,
-}) async {
-  try {
-    final appDir = await getApplicationDocumentsDirectory();
-    if (source.path.startsWith(appDir.path)) {
-      return source;
+import '../forms/heat_network_assessment/services/hna_web_editor_attachment_context.dart';
+import '../services/platform/image_persistence.dart';
+
+class AppResolvedImage extends StatelessWidget {
+  const AppResolvedImage({
+    super.key,
+    required this.imagePath,
+    this.width,
+    this.height,
+    this.fit = BoxFit.cover,
+  });
+
+  final String imagePath;
+  final double? width;
+  final double? height;
+  final BoxFit fit;
+
+  @override
+  Widget build(BuildContext context) {
+    final path = imagePath.trim();
+    if (path.isEmpty) {
+      return _placeholder();
     }
 
-    final ext = p.extension(source.path);
-    final safeExt = ext.isNotEmpty ? ext : '.jpg';
-    final stamp = DateTime.now().microsecondsSinceEpoch;
-    final fileName = suffix == null
-        ? '${prefix}_$stamp$safeExt'
-        : '${prefix}_${stamp}_$suffix$safeExt';
-    final destPath = p.join(appDir.path, fileName);
+    if (!kIsWeb) {
+      return Image.file(
+        File(path),
+        width: width,
+        height: height,
+        fit: fit,
+        errorBuilder: (context, error, stackTrace) => _placeholder(),
+      );
+    }
 
-    await File(source.path).copy(destPath);
-    return XFile(destPath);
-  } catch (_) {
-    return source;
+    if (path.startsWith('http://') ||
+        path.startsWith('https://') ||
+        path.startsWith('data:') ||
+        path.startsWith('blob:')) {
+      return Image.network(
+        path,
+        width: width,
+        height: height,
+        fit: fit,
+        errorBuilder: (context, error, stackTrace) => _placeholder(),
+      );
+    }
+
+    return FutureBuilder<Uint8List?>(
+      future: HnaWebEditorAttachmentContext.instance.loadBytesForLocalPath(
+        path,
+      ),
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes == null) {
+          return _placeholder(
+            isLoading: snapshot.connectionState == ConnectionState.waiting,
+          );
+        }
+        return Image.memory(
+          bytes,
+          width: width,
+          height: height,
+          fit: fit,
+          gaplessPlayback: true,
+          errorBuilder: (context, error, stackTrace) => _placeholder(),
+        );
+      },
+    );
+  }
+
+  Widget _placeholder({bool isLoading = false}) {
+    return Container(
+      width: width,
+      height: height,
+      color: Colors.grey[200],
+      alignment: Alignment.center,
+      child: isLoading
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.image_not_supported),
+    );
   }
 }
 
@@ -329,11 +391,9 @@ class _AppImageCaptureState extends State<AppImageCapture> {
       );
 
       if (photo != null) {
-        final persisted = await _persistXFileToDocuments(
-          photo,
-          prefix: 'capture',
-        );
-        widget.onImageChanged(persisted);
+        final paths = await persistPickedImagePaths([photo], prefix: 'capture');
+        final path = paths.isNotEmpty ? paths.first : photo.path;
+        widget.onImageChanged(XFile(path));
       }
     } catch (e) {
       if (mounted) {
@@ -354,11 +414,9 @@ class _AppImageCaptureState extends State<AppImageCapture> {
       );
 
       if (photo != null) {
-        final persisted = await _persistXFileToDocuments(
-          photo,
-          prefix: 'gallery',
-        );
-        widget.onImageChanged(persisted);
+        final paths = await persistPickedImagePaths([photo], prefix: 'gallery');
+        final path = paths.isNotEmpty ? paths.first : photo.path;
+        widget.onImageChanged(XFile(path));
       }
     } catch (e) {
       if (mounted) {
@@ -382,7 +440,10 @@ class _AppImageCaptureState extends State<AppImageCapture> {
           ),
           body: Center(
             child: InteractiveViewer(
-              child: Image.file(File(widget.image!.path), fit: BoxFit.contain),
+              child: AppResolvedImage(
+                imagePath: widget.image!.path,
+                fit: BoxFit.contain,
+              ),
             ),
           ),
         ),
@@ -463,12 +524,20 @@ class _AppImageCaptureState extends State<AppImageCapture> {
                       onTap: () => _showFullImage(context),
                       child: Stack(
                         children: [
-                          Image.file(
-                            File(widget.image!.path),
-                            width: double.infinity,
-                            height: 200,
-                            fit: BoxFit.cover,
-                          ),
+                          if (!kIsWeb)
+                            Image.file(
+                              File(widget.image!.path),
+                              width: double.infinity,
+                              height: 200,
+                              fit: BoxFit.cover,
+                            )
+                          else
+                            AppResolvedImage(
+                              imagePath: widget.image!.path,
+                              width: double.infinity,
+                              height: 200,
+                              fit: BoxFit.cover,
+                            ),
                           Positioned(
                             top: 8,
                             right: 8,
@@ -581,12 +650,14 @@ class AppSignatureCapture extends StatelessWidget {
 
   bool _fileExists(String? path) {
     if (path == null || path.isEmpty) return false;
+    if (kIsWeb) return false;
     return File(path).existsSync();
   }
 
   Future<void> _deleteIfExists(String? path) async {
     if (!deletePreviousFile) return;
     if (path == null || path.isEmpty) return;
+    if (kIsWeb) return;
 
     try {
       final file = File(path);
@@ -635,6 +706,14 @@ class AppSignatureCapture extends StatelessWidget {
           TextButton(onPressed: controller.clear, child: const Text('Clear')),
           ElevatedButton(
             onPressed: () async {
+              if (kIsWeb) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Signature capture is not supported here.'),
+                  ),
+                );
+                return;
+              }
               if (controller.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
@@ -955,12 +1034,9 @@ class _AppMultiImageCaptureState extends State<AppMultiImageCapture> {
       );
 
       if (photo != null) {
-        final persisted = await _persistXFileToDocuments(
-          photo,
-          prefix: 'capture',
-          suffix: '${widget.images.length}',
-        );
-        final newImages = [...widget.images, persisted];
+        final paths = await persistPickedImagePaths([photo], prefix: 'capture');
+        final path = paths.isNotEmpty ? paths.first : photo.path;
+        final newImages = [...widget.images, XFile(path)];
         widget.onImagesChanged(newImages);
       }
     } catch (e) {
@@ -1001,17 +1077,13 @@ class _AppMultiImageCaptureState extends State<AppMultiImageCapture> {
         final remainingSlots = widget.maxImages - widget.images.length;
         final photosToAdd = photos.take(remainingSlots).toList();
 
-        final List<XFile> persistedPhotosToAdd = [];
-        for (int i = 0; i < photosToAdd.length; i++) {
-          final persisted = await _persistXFileToDocuments(
-            photosToAdd[i],
-            prefix: 'gallery',
-            suffix: '${widget.images.length + i}',
-          );
-          persistedPhotosToAdd.add(persisted);
-        }
+        final paths = await persistPickedImagePaths(
+          photosToAdd,
+          prefix: 'gallery',
+        );
+        final persisted = paths.map((e) => XFile(e)).toList(growable: false);
 
-        final newImages = [...widget.images, ...persistedPhotosToAdd];
+        final newImages = [...widget.images, ...persisted];
         widget.onImagesChanged(newImages);
 
         if (mounted && photos.length > remainingSlots) {
@@ -1058,7 +1130,10 @@ class _AppMultiImageCaptureState extends State<AppMultiImageCapture> {
           ),
           body: Center(
             child: InteractiveViewer(
-              child: Image.file(File(image.path), fit: BoxFit.contain),
+              child: AppResolvedImage(
+                imagePath: image.path,
+                fit: BoxFit.contain,
+              ),
             ),
           ),
         ),
@@ -1131,8 +1206,8 @@ class _AppMultiImageCaptureState extends State<AppMultiImageCapture> {
                       children: [
                         ClipRRect(
                           borderRadius: BorderRadius.circular(8),
-                          child: Image.file(
-                            File(image.path),
+                          child: AppResolvedImage(
+                            imagePath: image.path,
                             width: 120,
                             height: 120,
                             fit: BoxFit.cover,

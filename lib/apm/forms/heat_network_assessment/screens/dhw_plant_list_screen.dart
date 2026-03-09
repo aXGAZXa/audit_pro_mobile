@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../../database/database_helper.dart';
-import '../../../models/dhw_plant.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/entity_card.dart';
 import 'add_dhw_plant_screen.dart';
@@ -13,8 +11,12 @@ class DhwPlantListScreen extends StatefulWidget {
 }
 
 class _DhwPlantListScreenState extends State<DhwPlantListScreen> {
-  List<DhwPlant> _items = [];
-  int? _formId;
+  List<Map<String, dynamic>> _items = [];
+  Map<String, dynamic>? _assetsJson;
+  void Function(Map<String, dynamic> nextAssets)? _onAssetsChanged;
+  List<Map<String, dynamic>>? _observationsJson;
+  void Function(List<Map<String, dynamic>> nextObservations)?
+  _onObservationsChanged;
   bool _isLoading = true;
   bool _readOnly = false;
 
@@ -50,51 +52,135 @@ class _DhwPlantListScreenState extends State<DhwPlantListScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_formId == null) {
-      final args =
-          ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-      if (args != null) {
-        _formId = args['formId'] as int?;
-        _readOnly = args['readOnly'] as bool? ?? false;
-        _loadItems();
-      }
-    }
+    if (_assetsJson != null) return;
+
+    final args =
+        ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+    if (args == null) return;
+
+    final assets = args['assetsJson'];
+    final onAssetsChanged = args['onAssetsChanged'];
+    _assetsJson = assets is Map ? Map<String, dynamic>.from(assets) : null;
+    _onAssetsChanged = onAssetsChanged is Function
+        ? (onAssetsChanged as void Function(Map<String, dynamic>))
+        : null;
+
+    final obs = args['observationsJson'];
+    _observationsJson = obs is List
+        ? obs
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : null;
+
+    final onObsChanged = args['onObservationsChanged'];
+    final upstreamOnObsChanged = onObsChanged is Function
+        ? (onObsChanged as void Function(List<Map<String, dynamic>>))
+        : null;
+    _onObservationsChanged = upstreamOnObsChanged == null
+        ? null
+        : (next) {
+            _observationsJson = next;
+            upstreamOnObsChanged(next);
+          };
+
+    _readOnly = args['readOnly'] as bool? ?? false;
+    _loadItems();
   }
 
   Future<void> _loadItems() async {
-    if (_formId == null) return;
-
     setState(() => _isLoading = true);
-    final items = await DatabaseHelper.instance.getDhwPlants(_formId!);
 
-    if (!mounted) return;
+    final assets = _assetsJson;
+    if (assets == null) return;
+
+    final raw = assets['dhwPlants'];
+    final items = raw is List
+        ? raw
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : <Map<String, dynamic>>[];
+
     setState(() {
       _items = items;
       _isLoading = false;
     });
   }
 
-  void _addItem() {
-    Navigator.push(
+  void _emitItems(List<Map<String, dynamic>> nextItems) {
+    final assets = _assetsJson;
+    final onAssetsChanged = _onAssetsChanged;
+    if (assets == null || onAssetsChanged == null) return;
+
+    final nextAssets = Map<String, dynamic>.from(assets);
+    nextAssets['dhwPlants'] = nextItems;
+    _assetsJson = nextAssets;
+    onAssetsChanged(nextAssets);
+  }
+
+  Future<void> _addItem() async {
+    final saved = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
         builder: (context) => const AddDhwPlantScreen(),
-        settings: RouteSettings(arguments: {'formId': _formId}),
+        settings: RouteSettings(
+          arguments: {
+            'plant': null,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': _onAssetsChanged,
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': _onObservationsChanged,
+          },
+        ),
       ),
-    ).then((_) => _loadItems());
+    );
+
+    if (saved == null) return;
+    _upsertAndRefresh(saved);
   }
 
-  void _editItem(DhwPlant item) {
-    Navigator.push(
+  Future<void> _editItem(Map<String, dynamic> item) async {
+    final saved = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
         builder: (context) => const AddDhwPlantScreen(),
-        settings: RouteSettings(arguments: {'formId': _formId, 'plant': item}),
+        settings: RouteSettings(
+          arguments: {
+            'plant': item,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': _onAssetsChanged,
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': _onObservationsChanged,
+          },
+        ),
       ),
-    ).then((_) => _loadItems());
+    );
+
+    if (saved == null) return;
+    _upsertAndRefresh(saved);
   }
 
-  Future<void> _duplicateItem(DhwPlant item) async {
+  void _upsertAndRefresh(Map<String, dynamic> saved) {
+    final id = (saved['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
+
+    final nextItems = _items
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: true);
+
+    final index = nextItems.indexWhere((x) => (x['id'] ?? '').toString() == id);
+    if (index >= 0) {
+      nextItems[index] = saved;
+    } else {
+      nextItems.add(saved);
+    }
+
+    _emitItems(nextItems);
+    setState(() => _items = nextItems);
+  }
+
+  Future<void> _duplicateItem(Map<String, dynamic> item) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -117,32 +203,22 @@ class _DhwPlantListScreenState extends State<DhwPlantListScreen> {
 
     if (confirmed != true) return;
 
-    final newItem = DhwPlant(
-      formId: item.formId,
-      plantType: item.plantType,
-      fuelType: item.fuelType,
-      location: item.location,
-      make: item.make,
-      model: item.model,
-      serialNumber: null,
-      capacity: item.capacity,
-      heatInput: item.heatInput,
-      ageRange: item.ageRange,
-      condition: '',
-      operational: null,
-      imagePaths: const [],
-    );
+    final newItem = <String, dynamic>{
+      'plantType': item['plantType'],
+      'fuelType': item['fuelType'],
+      'location': item['location'],
+      'make': item['make'],
+      'model': item['model'],
+      'serialNumber': null,
+      'capacity': item['capacity'],
+      'heatInput': item['heatInput'],
+      'ageRange': item['ageRange'],
+      'condition': '',
+      'operational': null,
+      'imagePaths': const <String>[],
+    };
 
-    if (!mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const AddDhwPlantScreen(),
-        settings: RouteSettings(
-          arguments: {'formId': _formId, 'plant': newItem},
-        ),
-      ),
-    ).then((_) => _loadItems());
+    await _editItem(newItem);
   }
 
   @override
@@ -255,14 +331,36 @@ class _DhwPlantListScreenState extends State<DhwPlantListScreen> {
                           itemCount: _items.length,
                           itemBuilder: (context, index) {
                             final item = _items[index];
-                            final title = '${item.make} ${item.model}'.trim();
+
+                            final make = (item['make'] ?? '').toString().trim();
+                            final model = (item['model'] ?? '')
+                                .toString()
+                                .trim();
+                            final title = '$make $model'.trim();
+
+                            final plantType = (item['plantType'] ?? '')
+                                .toString()
+                                .trim();
+                            final location = (item['location'] ?? '')
+                                .toString()
+                                .trim();
+                            final capacity = (item['capacity'] ?? '')
+                                .toString()
+                                .trim();
+                            final imagePathsRaw = item['imagePaths'];
+                            final imagePaths = imagePathsRaw is List
+                                ? imagePathsRaw
+                                      .map((e) => e.toString())
+                                      .where((e) => e.trim().isNotEmpty)
+                                      .toList(growable: false)
+                                : <String>[];
 
                             final card = AppEntityCard(
                               title: title.isEmpty
                                   ? 'Unknown DHW Plant'
                                   : title,
-                              subtitle: item.plantType,
-                              imagePaths: item.imagePaths,
+                              subtitle: plantType,
+                              imagePaths: imagePaths,
                               actions: _readOnly
                                   ? null
                                   : [
@@ -273,7 +371,7 @@ class _DhwPlantListScreenState extends State<DhwPlantListScreen> {
                                       ),
                                     ],
                               details: [
-                                if (item.location.isNotEmpty)
+                                if (location.isNotEmpty)
                                   Row(
                                     children: [
                                       Icon(
@@ -286,7 +384,7 @@ class _DhwPlantListScreenState extends State<DhwPlantListScreen> {
                                       const SizedBox(width: 4),
                                       Expanded(
                                         child: Text(
-                                          item.location,
+                                          location,
                                           style: TextStyle(
                                             color: Theme.of(
                                               context,
@@ -296,10 +394,9 @@ class _DhwPlantListScreenState extends State<DhwPlantListScreen> {
                                       ),
                                     ],
                                   ),
-                                if (item.capacity != null &&
-                                    item.capacity!.trim().isNotEmpty)
+                                if (capacity.isNotEmpty)
                                   Text(
-                                    'Capacity: ${item.capacity}',
+                                    'Capacity: $capacity',
                                     style: Theme.of(
                                       context,
                                     ).textTheme.bodyMedium,
@@ -311,17 +408,25 @@ class _DhwPlantListScreenState extends State<DhwPlantListScreen> {
                             if (_readOnly) return card;
 
                             return Dismissible(
-                              key: Key('dhw_plant_${item.id ?? index}'),
+                              key: Key(
+                                'dhw_plant_${(item['id'] ?? index).toString()}',
+                              ),
                               direction: DismissDirection.endToStart,
                               confirmDismiss: (direction) =>
                                   _confirmDeleteDialog(),
                               onDismissed: (direction) async {
-                                if (item.id != null) {
-                                  await DatabaseHelper.instance.deleteDhwPlant(
-                                    item.id!,
-                                  );
-                                  _loadItems();
-                                }
+                                final id = (item['id'] ?? '').toString().trim();
+                                if (id.isEmpty) return;
+
+                                final nextItems = _items
+                                    .where(
+                                      (x) => (x['id'] ?? '').toString() != id,
+                                    )
+                                    .map((e) => Map<String, dynamic>.from(e))
+                                    .toList(growable: true);
+                                _emitItems(nextItems);
+                                if (!mounted) return;
+                                setState(() => _items = nextItems);
                               },
                               background: Container(
                                 margin: const EdgeInsets.only(bottom: 12),

@@ -1,12 +1,7 @@
 import 'package:flutter/material.dart';
-import '../../../database/database_helper.dart';
+
 import '../../../components/form_widgets.dart';
 import '../services/hna_derived_metrics_calculator.dart';
-import 'heat_generator_list_screen.dart';
-import 'communal_control_list_screen.dart';
-import 'dwelling_inspection_list_screen.dart';
-import 'meter_list_screen.dart';
-import 'phex_list_screen.dart';
 
 class AssessmentSummaryScreen extends StatefulWidget {
   final Map<String, dynamic> formData;
@@ -15,6 +10,12 @@ class AssessmentSummaryScreen extends StatefulWidget {
   final VoidCallback onBack;
   final int? formId;
 
+  /// Optional assets JSON (typically `payload['hna']['assets']`).
+  ///
+  /// When provided, counts and derived metrics are computed from JSON (no
+  /// per-entity SQLite reads).
+  final Map<String, dynamic>? assetsJson;
+
   const AssessmentSummaryScreen({
     super.key,
     required this.formData,
@@ -22,6 +23,7 @@ class AssessmentSummaryScreen extends StatefulWidget {
     required this.onNext,
     required this.onBack,
     this.formId,
+    this.assetsJson,
   });
 
   @override
@@ -48,66 +50,49 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
   }
 
   Future<void> _loadCounts() async {
-    if (widget.formId == null) {
+    final assets = widget.assetsJson;
+    if (assets == null) {
       setState(() => _isLoading = false);
       return;
     }
 
-    final db = DatabaseHelper.instance;
+    final meters = assets['heatMeters'] is List
+        ? assets['heatMeters'] as List
+        : const [];
+    final generators = assets['heatGenerators'] is List
+        ? assets['heatGenerators'] as List
+        : const [];
+    final controls = assets['communalControls'] is List
+        ? assets['communalControls'] as List
+        : const [];
+    final inspections = assets['dwellingInspections'] is List
+        ? assets['dwellingInspections'] as List
+        : const [];
+    final phex = assets['plateHeatExchangers'] is List
+        ? assets['plateHeatExchangers'] as List
+        : const [];
 
-    try {
-      final results = await Future.wait([
-        db.getHeatGenerators(widget.formId!),
-        db.getCommunalControls(widget.formId!),
-        db.getDwellingInspections(widget.formId!),
-        // Wrap potentially missing methods in Future.value([]) or try-catch blocks if needed
-        // Since we can't easily wrap individual futures in a list with reliable error handling for just one,
-        // we will proceed assuming these exist or catch the whole block.
-        // For meters and phex, let's play safe and fetch them separately if unsure,
-        // but parallelizing the main ones helps.
-      ]);
-
-      final generators = results[0] as List;
-      final controls = results[1] as List;
-      final inspections = results[2] as List;
-
-      List<dynamic> meters = [];
-      try {
-        meters = await db.getHeatMeters(widget.formId!);
-      } catch (_) {}
-
-      List<dynamic> phex = [];
-      try {
-        final phexData = await db.getPlateHeatExchangers(widget.formId!);
-        phex = phexData;
-      } catch (_) {}
-
-      if (mounted) {
-        setState(() {
-          _generatorCount = generators.length;
-          _communalControlCount = controls.length;
-          _dwellingInspectionCount = inspections.length;
-          _meterCount = meters.length;
-          _phexCount = phex.length;
-          _isLoading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
+    setState(() {
+      _generatorCount = generators.length;
+      _communalControlCount = controls.length;
+      _dwellingInspectionCount = inspections.length;
+      _meterCount = meters.length;
+      _phexCount = phex.length;
+      _isLoading = false;
+    });
   }
 
   Future<void> _computeAndPersistDerivedMetrics() async {
-    if (widget.formId == null) return;
     if (_isComputingDerivedMetrics) return;
+
+    // JSON-only: compute from payload fragments rather than SQLite tables.
+    if (widget.assetsJson == null) return;
 
     setState(() => _isComputingDerivedMetrics = true);
     try {
-      final metrics = await HnaDerivedMetricsCalculator.compute(
-        formId: widget.formId!,
+      final metrics = HnaDerivedMetricsCalculator.computeFromPayload(
         formData: widget.formData,
+        assetsJson: widget.assetsJson,
       );
 
       if (!mounted) return;
@@ -152,63 +137,45 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
     );
   }
 
-  Widget _buildCountItem(
-    String label,
-    int count,
-    IconData icon, {
-    VoidCallback? onTap,
-  }) {
+  Widget _buildCountItem(String label, int count, IconData icon) {
     return Card(
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Icon(icon, size: 32, color: Theme.of(context).primaryColor),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Icon(icon, size: 32, color: Theme.of(context).primaryColor),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
                     ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Text(
-                  count.toString(),
-                  style: TextStyle(
-                    color: Theme.of(context).primaryColor,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
                   ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                count.toString(),
+                style: TextStyle(
+                  color: Theme.of(context).primaryColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
                 ),
               ),
-              if (onTap != null) ...[
-                const SizedBox(width: 16),
-                Icon(
-                  Icons.chevron_right,
-                  color: Theme.of(context).disabledColor,
-                ),
-              ],
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -290,7 +257,6 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
                 const SizedBox(height: 16),
               ],
 
-              // Site Details Section
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -315,19 +281,19 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
                       const SizedBox(height: 16),
                       _buildSummaryItem(
                         'Site Name',
-                        widget.formData['siteName'] ?? 'N/A',
+                        (widget.formData['siteName'] ?? 'N/A').toString(),
                       ),
                       _buildSummaryItem(
                         'Address',
-                        widget.formData['streetAddress'] ?? 'N/A',
+                        (widget.formData['streetAddress'] ?? 'N/A').toString(),
                       ),
                       _buildSummaryItem(
                         'Postcode',
-                        widget.formData['postcode'] ?? 'N/A',
+                        (widget.formData['postcode'] ?? 'N/A').toString(),
                       ),
                       _buildSummaryItem(
                         'Client',
-                        widget.formData['client'] ?? 'N/A',
+                        (widget.formData['client'] ?? 'N/A').toString(),
                       ),
                     ],
                   ),
@@ -335,7 +301,6 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
               ),
               const SizedBox(height: 24),
 
-              // Development Details
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -359,19 +324,20 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
                       const SizedBox(height: 16),
                       _buildSummaryItem(
                         'Network Type',
-                        widget.formData['meetsHeatNetworkDefinition'] ?? 'N/A',
+                        (widget.formData['meetsHeatNetworkDefinition'] ?? 'N/A')
+                            .toString(),
                       ),
                       _buildSummaryItem(
                         'Blocks',
-                        widget.formData['numBlocks']?.toString() ?? '0',
+                        (widget.formData['numBlocks'] ?? 0).toString(),
                       ),
                       _buildSummaryItem(
                         'Max Floors',
-                        widget.formData['maxFloors']?.toString() ?? '0',
+                        (widget.formData['maxFloors'] ?? 0).toString(),
                       ),
                       _buildSummaryItem(
                         'Dwellings',
-                        widget.formData['numDwellings']?.toString() ?? '0',
+                        (widget.formData['numDwellings'] ?? 0).toString(),
                       ),
                     ],
                   ),
@@ -379,7 +345,6 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
               ),
               const SizedBox(height: 24),
 
-              // System Configuration
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
@@ -403,12 +368,14 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
                       const SizedBox(height: 16),
                       _buildSummaryItem(
                         'Dedicated DHW Plant',
-                        widget.formData['dedicatedCommunalDhwPlant'] ?? 'N/A',
+                        (widget.formData['dedicatedCommunalDhwPlant'] ?? 'N/A')
+                            .toString(),
                       ),
                       if (widget.formData['dedicatedCommunalDhwPlant'] == 'Yes')
                         _buildSummaryItem(
                           'DHW Secondary Return',
-                          widget.formData['dhwSecondaryReturn'] ?? 'N/A',
+                          (widget.formData['dhwSecondaryReturn'] ?? 'N/A')
+                              .toString(),
                         ),
                     ],
                   ),
@@ -416,7 +383,6 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
               ),
               const SizedBox(height: 24),
 
-              // Assets Summary
               const Text(
                 'Captured Assets',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -427,85 +393,28 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
                   'Plate Heat Exchangers',
                   _phexCount,
                   Icons.settings_input_component,
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const PhexListScreen(),
-                      settings: RouteSettings(
-                        arguments: {'formId': widget.formId, 'readOnly': true},
-                      ),
-                    ),
-                  ),
                 ),
               _buildCountItem(
                 'Heat Generators',
                 _generatorCount,
                 Icons.fireplace,
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const HeatGeneratorListScreen(),
-                    settings: RouteSettings(
-                      arguments: {'formId': widget.formId, 'readOnly': true},
-                    ),
-                  ),
-                ),
               ),
               _buildCountItem(
                 'Communal Controls',
                 _communalControlCount,
                 Icons.settings_remote,
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const CommunalControlListScreen(),
-                    settings: RouteSettings(
-                      arguments: {'formId': widget.formId, 'readOnly': true},
-                    ),
-                  ),
-                ),
               ),
               if (_meterCount > 0)
-                _buildCountItem(
-                  'Heat Meters',
-                  _meterCount,
-                  Icons.speed,
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const MeterListScreen(),
-                      settings: RouteSettings(
-                        arguments: {
-                          'formId': widget.formId,
-                          'readOnly': true,
-                          'networkType':
-                              null, // Passing null so it loads ALL meters if readOnly logic handles it
-                        },
-                      ),
-                    ),
-                  ),
-                ),
+                _buildCountItem('Heat Meters', _meterCount, Icons.speed),
               _buildCountItem(
                 'Dwelling Inspections',
                 _dwellingInspectionCount,
                 Icons.home,
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const DwellingInspectionListScreen(),
-                    settings: RouteSettings(
-                      arguments: {'formId': widget.formId, 'readOnly': true},
-                    ),
-                  ),
-                ),
               ),
-
               const SizedBox(height: 32),
             ],
           ),
         ),
-
-        // Bottom Bar
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -529,7 +438,6 @@ class _AssessmentSummaryScreenState extends State<AssessmentSummaryScreen> {
                   child: AppButton(
                     text: 'Confirm & Sign',
                     onPressed: widget.onNext,
-                    // Typically 'Confirm' implies proceeding to the next step which is signature
                   ),
                 ),
               ],

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
+import 'dart:convert';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:uuid/uuid.dart';
 
 class ObservationsListScreen extends StatefulWidget {
   const ObservationsListScreen({super.key});
@@ -16,11 +18,19 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
   List<Map<String, dynamic>> _observations = [];
   bool _isLoading = true;
 
+  List<Map<String, dynamic>>? _observationsJsonArg;
+  void Function(List<Map<String, dynamic>> next)? _onObservationsChangedArg;
+
+  bool _useDraftJson = false;
+  String? _formType;
+  String? _formStatus;
+  String? _formUuid;
+
   int? _formId;
   String? _questionReference;
   String? _questionText;
   String? _sectionName;
-  int? _assetId;
+  String? _assetId;
   String? _assetType;
   String? _assetMakeModel;
 
@@ -35,26 +45,103 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
       _questionReference = args['questionReference'] as String?;
       _questionText = args['questionText'] as String?;
       _sectionName = args['sectionName'] as String?;
-      _assetId = args['assetId'] as int?;
+      final rawAssetId = args['assetId'];
+      _assetId = rawAssetId?.toString();
       _assetType = args['assetType'] as String?;
       _assetMakeModel = args['assetMakeModel'] as String?;
 
-      if (_formId != null && _questionReference != null) {
-        _loadObservations();
+      final obsArg = args['observationsJson'];
+      if (obsArg is List) {
+        _observationsJsonArg = obsArg
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList(growable: true);
+      }
+      final onObsChanged = args['onObservationsChanged'];
+      if (onObsChanged is void Function(List<Map<String, dynamic>>)) {
+        _onObservationsChangedArg = onObsChanged;
+      }
+
+      if (_questionReference != null &&
+          (_formId != null ||
+              _observationsJsonArg != null ||
+              _onObservationsChangedArg != null)) {
+        _initAndLoad();
       }
     }
+  }
+
+  Future<void> _initAndLoad() async {
+    if (_formId == null) {
+      _useDraftJson = true;
+      if (!mounted) return;
+      await _loadObservations();
+      return;
+    }
+
+    try {
+      final form = await _db.getForm(_formId!);
+      if (form != null) {
+        _formType = (form['form_type'] ?? '').toString();
+        _formStatus = (form['status'] ?? '').toString();
+        _formUuid = (form['uuid'] ?? '').toString();
+
+        // JSON-only mode for HNA drafts: observations live in the single forms-row doc.
+        _useDraftJson = _formType == 'heat_network_assessment';
+      }
+    } catch (_) {
+      // If this fails, fall back to DB mode.
+      _useDraftJson = false;
+    }
+
+    if (!mounted) return;
+    await _loadObservations();
   }
 
   Future<void> _loadObservations() async {
     setState(() => _isLoading = true);
 
     try {
-      final observations = await _db.getQuestionObservations(
-        _formId!,
-        _questionReference!,
-      );
+      if (_useDraftJson) {
+        // Prefer in-memory list if provided by caller; otherwise read persisted draft.
+        final list =
+            _observationsJsonArg ??
+            await () async {
+              if (_formId == null) {
+                return <Map<String, dynamic>>[];
+              }
+              final form = await _db.getForm(_formId!);
+              final draftRaw = form?['form_data'];
+              final draftDoc = draftRaw is Map
+                  ? Map<String, dynamic>.from(draftRaw)
+                  : null;
 
-      _observations = observations;
+              final obsRaw = draftDoc?['observations'];
+              return obsRaw is List
+                  ? obsRaw
+                        .whereType<Map>()
+                        .map((e) => Map<String, dynamic>.from(e))
+                        .toList(growable: true)
+                  : <Map<String, dynamic>>[];
+            }();
+
+        final ref = (_questionReference ?? '').trim();
+        _observations = list
+            .where((o) {
+              final oRef =
+                  (o['questionReference'] ?? o['question_reference'] ?? '')
+                      .toString()
+                      .trim();
+              return oRef == ref;
+            })
+            .toList(growable: false);
+      } else {
+        final observations = await _db.getQuestionObservations(
+          _formId!,
+          _questionReference!,
+        );
+        _observations = observations;
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -82,7 +169,6 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
     );
 
     if (result != null && result is Map<String, dynamic>) {
-      // Save the new observation to database
       await _saveObservation(result);
       await _loadObservations();
     }
@@ -90,8 +176,11 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
 
   Future<void> _editObservation(Map<String, dynamic> observation) async {
     // Convert image paths (Strings) to XFile objects for editing
-    final images = observation['images'] as List<dynamic>?;
-    final xFileImages = images?.map((path) => XFile(path.toString())).toList();
+    final imagesRaw =
+        (observation['images'] ?? observation['imagePaths']) as List<dynamic>?;
+    final xFileImages = imagesRaw
+        ?.map((path) => XFile(path.toString()))
+        .toList(growable: false);
 
     final observationForEdit = {
       'id': observation['id'], // Pass the ID so we know we're editing
@@ -114,15 +203,14 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
     );
 
     if (result != null && result is Map<String, dynamic>) {
-      // Update the observation in database - pass the ID
-      await _saveObservation(result, observationId: observation['id'] as int);
+      await _saveObservation(result, observationId: observation['id']);
       await _loadObservations();
     }
   }
 
   Future<void> _saveObservation(
     Map<String, dynamic> observationData, {
-    int? observationId,
+    dynamic observationId,
   }) async {
     try {
       final images = observationData['images'] as List<XFile>?;
@@ -131,20 +219,132 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
       final unsafeClassification =
           observationData['unsafe_classification'] as String?;
 
-      await _db.saveObservation(
-        id: observationId, // Pass the ID if editing
-        formId: _formId!,
-        questionReference: _questionReference!,
-        notes: observationData['notes'] as String?,
-        imagePaths: imagePaths,
-        questionText: _questionText,
-        sectionName: _sectionName,
-        assetId: _assetId,
-        assetType: _assetType,
-        assetMakeModel: _assetMakeModel,
-        isUnsafe: isUnsafe,
-        unsafeClassification: unsafeClassification,
-      );
+      if (_useDraftJson) {
+        if (_formId == null) {
+          final all = (_observationsJsonArg ?? <Map<String, dynamic>>[])
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true);
+
+          final existingId = (observationId ?? '').toString().trim();
+          final id = existingId.isEmpty ? const Uuid().v4() : existingId;
+          final nowUtc = DateTime.now().toUtc().toIso8601String();
+
+          final record = <String, dynamic>{
+            'id': id,
+            'questionReference': _questionReference,
+            'notes': observationData['notes'] as String?,
+            'imagePaths': imagePaths ?? <String>[],
+            'questionText': _questionText,
+            'sectionName': _sectionName,
+            'assetId': _assetId,
+            'assetType': _assetType,
+            'assetMakeModel': _assetMakeModel,
+            'is_unsafe': isUnsafe,
+            'unsafe_classification': unsafeClassification,
+            'createdAt': nowUtc,
+            'updatedAt': nowUtc,
+          };
+
+          final idx = all.indexWhere((o) => (o['id'] ?? '').toString() == id);
+          if (idx >= 0) {
+            final existing = all[idx];
+            record['createdAt'] =
+                (existing['createdAt'] ?? existing['createdAtUtc'] ?? nowUtc)
+                    .toString();
+            all[idx] = record;
+          } else {
+            all.add(record);
+          }
+
+          _observationsJsonArg = all;
+          _onObservationsChangedArg?.call(all);
+          return;
+        }
+
+        final form = await _db.getForm(_formId!);
+        if (form == null) return;
+        final draftRaw = form['form_data'];
+        if (draftRaw is! Map) return;
+        final draftDoc = Map<String, dynamic>.from(draftRaw);
+
+        final obsRaw = draftDoc['observations'];
+        final all = obsRaw is List
+            ? obsRaw
+                  .whereType<Map>()
+                  .map((e) => Map<String, dynamic>.from(e))
+                  .toList(growable: true)
+            : <Map<String, dynamic>>[];
+
+        final existingId = (observationId ?? '').toString().trim();
+        final id = existingId.isEmpty ? const Uuid().v4() : existingId;
+        final nowUtc = DateTime.now().toUtc().toIso8601String();
+
+        final record = <String, dynamic>{
+          'id': id,
+          'questionReference': _questionReference,
+          'notes': observationData['notes'] as String?,
+          // Canonical key for HNA draft JSON and submission attachments.
+          'imagePaths': imagePaths ?? <String>[],
+          'questionText': _questionText,
+          'sectionName': _sectionName,
+          'assetId': _assetId,
+          'assetType': _assetType,
+          'assetMakeModel': _assetMakeModel,
+          'is_unsafe': isUnsafe,
+          'unsafe_classification': unsafeClassification,
+          'createdAt': nowUtc,
+          'updatedAt': nowUtc,
+        };
+
+        final idx = all.indexWhere((o) => (o['id'] ?? '').toString() == id);
+        if (idx >= 0) {
+          final existing = all[idx];
+          record['createdAt'] =
+              (existing['createdAt'] ?? existing['createdAtUtc'] ?? nowUtc)
+                  .toString();
+          all[idx] = record;
+        } else {
+          all.add(record);
+        }
+
+        draftDoc['observations'] = all;
+
+        // Keep caller in sync so parent autosaves/submissions don't overwrite.
+        final cb = _onObservationsChangedArg;
+        if (cb != null) {
+          _observationsJsonArg = all;
+          cb(all);
+        }
+
+        final status = (form['status'] ?? _formStatus ?? 'draft').toString();
+        final formType =
+            (form['form_type'] ?? _formType ?? 'heat_network_assessment')
+                .toString();
+        final uuid = (form['uuid'] ?? _formUuid ?? '').toString();
+
+        await _db.saveForm(
+          id: _formId,
+          formType: formType,
+          status: status,
+          formData: jsonDecode(jsonEncode(draftDoc)) as Map<String, dynamic>,
+          uuid: uuid.isEmpty ? null : uuid,
+        );
+      } else {
+        await _db.saveObservation(
+          id: observationId is int ? observationId : null,
+          formId: _formId!,
+          questionReference: _questionReference!,
+          notes: observationData['notes'] as String?,
+          imagePaths: imagePaths,
+          questionText: _questionText,
+          sectionName: _sectionName,
+          assetId: int.tryParse((_assetId ?? '').toString()),
+          assetType: _assetType,
+          assetMakeModel: _assetMakeModel,
+          isUnsafe: isUnsafe,
+          unsafeClassification: unsafeClassification,
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -181,8 +381,66 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
 
     if (confirmed == true) {
       try {
-        await _db.deleteObservation(observation['id'] as int);
-        await _loadObservations();
+        if (_useDraftJson) {
+          if (_formId == null) {
+            final all = (_observationsJsonArg ?? <Map<String, dynamic>>[])
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList(growable: true);
+
+            final id = (observation['id'] ?? '').toString();
+            all.removeWhere((o) => (o['id'] ?? '').toString() == id);
+
+            _observationsJsonArg = all;
+            _onObservationsChangedArg?.call(all);
+            await _loadObservations();
+            return;
+          }
+
+          final form = await _db.getForm(_formId!);
+          if (form == null) return;
+          final draftRaw = form['form_data'];
+          if (draftRaw is! Map) return;
+          final draftDoc = Map<String, dynamic>.from(draftRaw);
+
+          final obsRaw = draftDoc['observations'];
+          final all = obsRaw is List
+              ? obsRaw
+                    .whereType<Map>()
+                    .map((e) => Map<String, dynamic>.from(e))
+                    .toList(growable: true)
+              : <Map<String, dynamic>>[];
+
+          final id = (observation['id'] ?? '').toString();
+          all.removeWhere((o) => (o['id'] ?? '').toString() == id);
+          draftDoc['observations'] = all;
+
+          final cb = _onObservationsChangedArg;
+          if (cb != null) {
+            _observationsJsonArg = all;
+            cb(all);
+          }
+
+          final status = (form['status'] ?? _formStatus ?? 'draft').toString();
+          final formType =
+              (form['form_type'] ?? _formType ?? 'heat_network_assessment')
+                  .toString();
+          final uuid = (form['uuid'] ?? _formUuid ?? '').toString();
+
+          await _db.saveForm(
+            id: _formId,
+            formType: formType,
+            status: status,
+            formData: jsonDecode(jsonEncode(draftDoc)) as Map<String, dynamic>,
+            uuid: uuid.isEmpty ? null : uuid,
+          );
+          await _loadObservations();
+        } else {
+          final id = observation['id'];
+          if (id is int) {
+            await _db.deleteObservation(id);
+            await _loadObservations();
+          }
+        }
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -208,10 +466,13 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
     };
     final isImmediatelyDangerous =
         classification == 'ID' || classification == 'Immediately Dangerous';
-    final images = (observation['images'] as List<dynamic>? ?? [])
-        .map((e) => e.toString())
-        .where((p) => p.isNotEmpty)
-        .toList();
+    final images =
+        ((observation['images'] ?? observation['imagePaths'])
+                    as List<dynamic>? ??
+                [])
+            .map((e) => e.toString())
+            .where((p) => p.isNotEmpty)
+            .toList();
 
     return Dismissible(
       key: Key('observation_${observation['id']}'),

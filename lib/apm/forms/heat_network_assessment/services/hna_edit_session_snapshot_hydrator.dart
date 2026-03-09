@@ -3,12 +3,6 @@ import 'dart:io';
 import 'package:audit_pro_mobile/logging/apm_logger.dart';
 import 'package:audit_pro_mobile/apm/config/api_config.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
-import 'package:audit_pro_mobile/apm/models/communal_control.dart';
-import 'package:audit_pro_mobile/apm/models/dhw_plant.dart';
-import 'package:audit_pro_mobile/apm/models/dwelling_inspection.dart';
-import 'package:audit_pro_mobile/apm/models/heat_generator.dart';
-import 'package:audit_pro_mobile/apm/models/heat_meter.dart';
-import 'package:audit_pro_mobile/apm/models/plate_heat_exchanger.dart';
 import 'package:audit_pro_mobile/apm/services/portal_api_client.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -37,34 +31,8 @@ class HnaEditSessionSnapshotHydrator {
         .toList();
   }
 
-  static List<String> _asStringList(dynamic value) {
-    if (value is! List) return const [];
-    return value
-        .where((e) => e != null)
-        .map((e) => e.toString())
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
-  }
-
-  static DateTime? _tryParseDate(dynamic value) {
-    final s = value?.toString().trim() ?? '';
-    if (s.isEmpty) return null;
-    return DateTime.tryParse(s);
-  }
-
-  static int? _tryParseInt(dynamic value) {
-    if (value is int) return value;
-    return int.tryParse(value?.toString() ?? '');
-  }
-
   static String _readString(Map<String, dynamic> map, String key) {
     return map[key]?.toString().trim() ?? '';
-  }
-
-  static String? _readNullableString(Map<String, dynamic> map, String key) {
-    final s = _readString(map, key);
-    return s.isEmpty ? null : s;
   }
 
   static String _inferExtension({
@@ -318,10 +286,21 @@ class HnaEditSessionSnapshotHydrator {
       'createdAtUtc': DateTime.now().toUtc().toIso8601String(),
     };
 
+    final assets = _asMap(hna['assets']);
+    final observations = _asListOfMaps(hna['observations']);
+    final unsafe = _asMap(hna['unsafe']);
+
+    final draftDoc = <String, dynamic>{
+      'formData': formData,
+      'assets': assets,
+      'unsafe': unsafe,
+      'observations': observations,
+    };
+
     final newFormId = await db.saveForm(
       formType: 'heat_network_assessment',
       status: 'draft',
-      formData: formData,
+      formData: draftDoc,
       uuid: stableFormUuid.isEmpty ? null : stableFormUuid,
     );
 
@@ -329,261 +308,6 @@ class HnaEditSessionSnapshotHydrator {
       formType: 'heat_network_assessment',
       formId: newFormId,
     );
-
-    final assets = _asMap(hna['assets']);
-
-    // Assets.
-    for (final m in _asListOfMaps(assets['heatMeters'])) {
-      await db.saveHeatMeter(
-        HeatMeter(
-          formId: newFormId,
-          meterType: _readString(m, 'meterType'),
-          make: _readString(m, 'make'),
-          model: _readString(m, 'model'),
-          location: _readString(m, 'location'),
-          ageRange: _readString(m, 'ageRange'),
-          serialNumber: _readNullableString(m, 'serialNumber'),
-          operational: _readString(m, 'operational'),
-          reading: _readNullableString(m, 'reading'),
-          relatedAssetType: _readNullableString(m, 'relatedAssetType'),
-          relatedAssetId: _tryParseInt(m['relatedAssetId']),
-          imagePaths: _asStringList(m['imagePaths']),
-          createdAt: _tryParseDate(m['createdAt']),
-          updatedAt: _tryParseDate(m['updatedAt']),
-        ),
-      );
-    }
-
-    for (final p in _asListOfMaps(assets['plateHeatExchangers'])) {
-      await db.savePlateHeatExchanger(
-        PlateHeatExchanger(
-          formId: newFormId,
-          location: _readString(p, 'location'),
-          make: _readString(p, 'make'),
-          model: _readString(p, 'model'),
-          serialNumber: _readNullableString(p, 'serialNumber'),
-          capacity: _readNullableString(p, 'capacity'),
-          ageRange: _readString(p, 'ageRange'),
-          condition: _readString(p, 'condition'),
-          insulationCondition: _readNullableString(p, 'insulationCondition'),
-          freeOfLeaks: _readNullableString(p, 'freeOfLeaks'),
-          hasIsolationValves: _readNullableString(p, 'hasIsolationValves'),
-          hasTempGauges: _readNullableString(p, 'hasTempGauges'),
-          hasIndividualMeter: _readNullableString(p, 'hasIndividualMeter'),
-          imagePaths: _asStringList(p['imagePaths']),
-          createdAt: _tryParseDate(p['createdAt']),
-          updatedAt: _tryParseDate(p['updatedAt']),
-        ),
-      );
-    }
-
-    for (final g in _asListOfMaps(assets['heatGenerators'])) {
-      await db.saveHeatGenerator(
-        HeatGenerator(
-          formId: newFormId,
-          generatorType: _readString(g, 'generatorType'),
-          fuelType: _readString(g, 'fuelType'),
-          location: _readString(g, 'location'),
-          make: _readString(g, 'make'),
-          model: _readString(g, 'model'),
-          serialNumber: _readNullableString(g, 'serialNumber'),
-          capacity: _readNullableString(g, 'capacity'),
-          ageRange: _readString(g, 'ageRange'),
-          condition: _readString(g, 'condition'),
-          operational: _readNullableString(g, 'operational'),
-          hasIndividualMeter: _readNullableString(g, 'hasIndividualMeter'),
-          imagePaths: _asStringList(g['imagePaths']),
-          createdAt: _tryParseDate(g['createdAt']),
-          updatedAt: _tryParseDate(g['updatedAt']),
-        ),
-      );
-    }
-
-    for (final d in _asListOfMaps(assets['dhwPlants'])) {
-      await db.saveDhwPlant(
-        DhwPlant(
-          formId: newFormId,
-          plantType: _readString(d, 'plantType'),
-          fuelType: _readNullableString(d, 'fuelType'),
-          location: _readString(d, 'location'),
-          make: _readString(d, 'make'),
-          model: _readString(d, 'model'),
-          serialNumber: _readNullableString(d, 'serialNumber'),
-          capacity: _readNullableString(d, 'capacity'),
-          heatInput: _readNullableString(d, 'heatInput'),
-          ageRange: _readString(d, 'ageRange'),
-          condition: _readString(d, 'condition'),
-          operational: _readNullableString(d, 'operational'),
-          imagePaths: _asStringList(d['imagePaths']),
-          createdAt: _tryParseDate(d['createdAt']),
-          updatedAt: _tryParseDate(d['updatedAt']),
-        ),
-      );
-    }
-
-    for (final c in _asListOfMaps(assets['communalControls'])) {
-      await db.saveCommunalControl(
-        CommunalControl(
-          formId: newFormId,
-          controlType: _readString(c, 'controlType'),
-          location: _readNullableString(c, 'location'),
-          make: _readNullableString(c, 'make'),
-          model: _readNullableString(c, 'model'),
-          serialNumber: _readNullableString(c, 'serialNumber'),
-          condition: _readNullableString(c, 'condition'),
-          operational: _readNullableString(c, 'operational'),
-          imagePaths: _asStringList(c['imagePaths']),
-          createdAt: _tryParseDate(c['createdAt']),
-          updatedAt: _tryParseDate(c['updatedAt']),
-        ),
-      );
-    }
-
-    for (final di in _asListOfMaps(assets['dwellingInspections'])) {
-      await db.saveDwellingInspection(
-        DwellingInspection(
-          formId: newFormId,
-          location: _readString(di, 'location'),
-          heatingType: _readNullableString(di, 'heatingType'),
-          heatGeneratorType: _readNullableString(di, 'heatGeneratorType'),
-          heatGeneratorFuelType: _readNullableString(
-            di,
-            'heatGeneratorFuelType',
-          ),
-          heatDistributionType: _readNullableString(di, 'heatDistributionType'),
-          dhwType: _readNullableString(di, 'dhwType'),
-          dhwGeneratorType: _readNullableString(di, 'dhwGeneratorType'),
-          dhwGeneratorFuelType: _readNullableString(di, 'dhwGeneratorFuelType'),
-          dhwCommunalType: _readNullableString(di, 'dhwCommunalType'),
-          heatingControls: _asStringList(di['heatingControls']),
-          heatingControlsOther: _readNullableString(di, 'heatingControlsOther'),
-          heatingNotes: _readNullableString(di, 'heatingNotes'),
-          heatingImagePaths: _asStringList(di['heatingImagePaths']),
-          dhwControls: _asStringList(di['dhwControls']),
-          dhwControlsOther: _readNullableString(di, 'dhwControlsOther'),
-          dhwNotes: _readNullableString(di, 'dhwNotes'),
-          dhwImagePaths: _asStringList(di['dhwImagePaths']),
-          heatingMetered: _readNullableString(di, 'heatingMetered'),
-          heatingSubMeterFeasible: _readNullableString(
-            di,
-            'heatingSubMeterFeasible',
-          ),
-          heatingSubMeterFeasibilityReason: _readNullableString(
-            di,
-            'heatingSubMeterFeasibilityReason',
-          ),
-          heatingSubMeterEvidenceImages: _asStringList(
-            di['heatingSubMeterEvidenceImages'],
-          ),
-          dhwMetered: _readNullableString(di, 'dhwMetered'),
-          dhwSubMeterFeasible: _readNullableString(di, 'dhwSubMeterFeasible'),
-          dhwSubMeterFeasibilityReason: _readNullableString(
-            di,
-            'dhwSubMeterFeasibilityReason',
-          ),
-          dhwSubMeterEvidenceImages: _asStringList(
-            di['dhwSubMeterEvidenceImages'],
-          ),
-          hiuMake: _readNullableString(di, 'hiuMake'),
-          hiuModel: _readNullableString(di, 'hiuModel'),
-          hiuSerialNumber: _readNullableString(di, 'hiuSerialNumber'),
-          condition: _readNullableString(di, 'condition'),
-          operational: _readNullableString(di, 'operational'),
-          imagePaths: _asStringList(di['imagePaths']),
-          createdAt: _tryParseDate(di['createdAt']),
-          updatedAt: _tryParseDate(di['updatedAt']) ?? DateTime.now(),
-        ),
-      );
-    }
-
-    // Observations + unsafe observations.
-    final oldToNewObservationId = <int, int>{};
-
-    Future<void> importObservation(
-      Map<String, dynamic> o, {
-      required bool isUnsafe,
-    }) async {
-      final questionReference = _readString(o, 'questionReference');
-      if (questionReference.isEmpty) return;
-
-      final oldId = _tryParseInt(o['id']);
-      final newId = await db.saveObservation(
-        formId: newFormId,
-        questionReference: questionReference,
-        notes: _readNullableString(o, 'notes'),
-        imagePaths: _asStringList(o['imagePaths']),
-        questionText: _readNullableString(o, 'questionText'),
-        sectionName: _readNullableString(o, 'sectionName'),
-        assetId: _tryParseInt(o['assetId']),
-        assetType: _readNullableString(o, 'assetType'),
-        assetMakeModel: _readNullableString(o, 'assetMakeModel'),
-        isUnsafe: isUnsafe,
-        unsafeClassification: _readNullableString(o, 'unsafeClassification'),
-        unsafeActionTaken: _readNullableString(o, 'unsafeActionTaken'),
-        unsafeWarningNoticeImage: _readNullableString(
-          o,
-          'unsafeWarningNoticeImage',
-        ),
-        unsafeAfterImage: _readNullableString(o, 'unsafeAfterImage'),
-        unsafeResidentReaction: _readNullableString(
-          o,
-          'unsafeResidentReaction',
-        ),
-        unsafeReportedToClient: _readNullableString(
-          o,
-          'unsafeReportedToClient',
-        ),
-        unsafeReportedInternally: _readNullableString(
-          o,
-          'unsafeReportedInternally',
-        ),
-        unsafeCheckedBy: _readNullableString(o, 'unsafeCheckedBy'),
-        unsafeCheckedDate: _readNullableString(o, 'unsafeCheckedDate'),
-        unsafeSentVia: _readNullableString(o, 'unsafeSentVia'),
-        unsafeSentTo: _readNullableString(o, 'unsafeSentTo'),
-      );
-
-      if (oldId != null) {
-        oldToNewObservationId[oldId] = newId;
-      }
-    }
-
-    final observations = _asListOfMaps(hna['observations']);
-    for (final o in observations) {
-      await importObservation(o, isUnsafe: false);
-    }
-
-    final unsafe = _asMap(hna['unsafe']);
-    final unsafeObs = _asListOfMaps(unsafe['unsafeObservations']);
-    for (final o in unsafeObs) {
-      await importObservation(o, isUnsafe: true);
-    }
-
-    // Unsafe reports (remap observation ids).
-    final unsafeReports = _asListOfMaps(unsafe['unsafeReports']);
-    for (final r in unsafeReports) {
-      final obsIds = (r['observationIds'] is List)
-          ? (r['observationIds'] as List)
-                .map(_tryParseInt)
-                .whereType<int>()
-                .toList()
-          : const <int>[];
-
-      final mapped = obsIds
-          .map((oldId) => oldToNewObservationId[oldId])
-          .whereType<int>()
-          .toList();
-
-      await db.saveUnsafeReport(
-        formId: newFormId,
-        actionTaken: _readNullableString(r, 'actionTaken'),
-        warningNoticeImage: _readNullableString(r, 'warningNoticeImage'),
-        afterImage: _readNullableString(r, 'afterImage'),
-        reportedToClient: _readNullableString(r, 'reportedToClient'),
-        reportedInternally: _readNullableString(r, 'reportedInternally'),
-        observationIds: mapped,
-      );
-    }
 
     ApmLogger.info(
       'Hydrated edit-session snapshot to local form formId=$newFormId submissionId=$submissionId editRequestId=$editRequestId',

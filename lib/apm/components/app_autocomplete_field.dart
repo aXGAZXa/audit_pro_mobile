@@ -1,6 +1,9 @@
 import 'dart:async';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+
+import '../services/suggestions/suggestion_store.dart';
 
 class AppAutocompleteField extends StatefulWidget {
   final String label;
@@ -63,7 +66,6 @@ class AppAutocompleteFieldState extends State<AppAutocompleteField> {
   }
 
   void _onTextChanged() {
-    // Don't load suggestions if we're programmatically setting the text
     if (_isSelectingSuggestion) return;
 
     final query = widget.controller.text;
@@ -80,25 +82,25 @@ class AppAutocompleteFieldState extends State<AppAutocompleteField> {
   }
 
   Future<void> _loadSuggestions(String query) async {
-    final db = DatabaseHelper.instance;
+    if (kIsWeb) return;
     final filterContext = widget.filterContext?.call();
 
-    final suggestions = await db.getSuggestions(
+    final suggestions = await suggestionStore.getSuggestions(
       fieldName: widget.fieldName,
       query: query,
       filterContext: filterContext,
     );
 
-    if (mounted) {
-      setState(() {
-        _suggestions = suggestions;
-      });
+    if (!mounted) return;
 
-      if (suggestions.isNotEmpty) {
-        _showOverlay();
-      } else {
-        _hideOverlay();
-      }
+    setState(() {
+      _suggestions = suggestions;
+    });
+
+    if (suggestions.isNotEmpty) {
+      _showOverlay();
+    } else {
+      _hideOverlay();
     }
   }
 
@@ -209,32 +211,28 @@ class AppAutocompleteFieldState extends State<AppAutocompleteField> {
   }
 
   Future<void> _deleteSuggestion(String value) async {
-    final db = DatabaseHelper.instance;
+    if (kIsWeb) return;
     final filterContext = widget.filterContext?.call();
 
-    await db.deleteSuggestion(
+    await suggestionStore.deleteSuggestion(
       fieldName: widget.fieldName,
       value: value,
       filterContext: filterContext,
     );
 
-    // Refresh suggestions
     final query = widget.controller.text;
     if (query.length >= widget.minCharsForSuggestions) {
       await _loadSuggestions(query);
     }
   }
 
-  /// Save current field value as a suggestion
-  /// Call this when the form is saved to persist valid suggestions
   Future<void> saveSuggestion() async {
+    if (kIsWeb) return;
     final value = widget.controller.text.trim();
     if (value.isEmpty) return;
-
-    final db = DatabaseHelper.instance;
     final filterContext = widget.filterContext?.call();
 
-    await db.saveSuggestion(
+    await suggestionStore.saveSuggestion(
       fieldName: widget.fieldName,
       value: value,
       filterContext: filterContext,

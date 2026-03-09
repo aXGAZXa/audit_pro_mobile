@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app/app_scaffold.dart';
+import '../apm/database/database_helper.dart';
 import '../auth/auth_session.dart';
 import '../hna/heat_network_assessment/heat_network_assessment_screen.dart';
 
@@ -21,17 +22,11 @@ class FormsHomeScreen extends StatelessWidget {
           children: [
             _buildFormCard(
               context,
-              title: 'Heat Network Assessment (HNA)',
-              description: 'Complete and submit a Heat Network Assessment.',
+              title: 'Heat Network Assessment',
               icon: Icons.network_check,
               color: Colors.deepOrange.shade400,
               onTap: () async {
-                await Navigator.of(context).push(
-                  MaterialPageRoute(
-                    settings: const RouteSettings(name: '/hna'),
-                    builder: (_) => const HeatNetworkAssessmentScreen(),
-                  ),
-                );
+                await _openHnaFromHome(context);
               },
             ),
           ],
@@ -40,10 +35,84 @@ class FormsHomeScreen extends StatelessWidget {
     );
   }
 
+  Future<void> _openHnaFromHome(BuildContext context) async {
+    final db = DatabaseHelper.instance;
+
+    final drafts = await db.getFormsIndex(
+      formType: 'heat_network_assessment',
+      statuses: const ['draft'],
+    );
+
+    if (!context.mounted) return;
+
+    if (drafts.isNotEmpty) {
+      final currentId = await db.getCurrentFormId('heat_network_assessment');
+
+      if (!context.mounted) return;
+
+      final resumeId =
+          (currentId != null &&
+              drafts.any((d) => (d['id'] as int?) == currentId))
+          ? currentId
+          : (drafts.first['id'] as int);
+
+      final choice = await showDialog<_HomeFormChoice>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Unfinished form found'),
+            content: const Text(
+              'You have an unfinished Heat Network Assessment. Do you want to start a new one or continue where you left off?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () =>
+                    Navigator.of(context).pop(_HomeFormChoice.cancel),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () =>
+                    Navigator.of(context).pop(_HomeFormChoice.resumeExisting),
+                child: const Text('Continue'),
+              ),
+              FilledButton(
+                onPressed: () =>
+                    Navigator.of(context).pop(_HomeFormChoice.startNew),
+                child: const Text('Start new'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (!context.mounted) return;
+      if (choice == null || choice == _HomeFormChoice.cancel) return;
+
+      if (choice == _HomeFormChoice.resumeExisting) {
+        if (!context.mounted) return;
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            settings: const RouteSettings(name: '/hna'),
+            builder: (_) => HeatNetworkAssessmentScreen(formId: resumeId),
+          ),
+        );
+        return;
+      }
+    }
+
+    if (!context.mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        settings: const RouteSettings(name: '/hna'),
+        builder: (_) => const HeatNetworkAssessmentScreen(forceNew: true),
+      ),
+    );
+  }
+
   Widget _buildFormCard(
     BuildContext context, {
     required String title,
-    required String description,
+    String? description,
     required IconData icon,
     required Color color,
     required VoidCallback onTap,
@@ -70,13 +139,16 @@ class FormsHomeScreen extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(title, style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 4),
-                    Text(
-                      description,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    if (description != null &&
+                        description.trim().isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        description,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
@@ -88,3 +160,5 @@ class FormsHomeScreen extends StatelessWidget {
     );
   }
 }
+
+enum _HomeFormChoice { cancel, startNew, resumeExisting }

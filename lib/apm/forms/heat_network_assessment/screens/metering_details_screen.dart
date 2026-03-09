@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../components/app_info_panel.dart';
 import '../../../components/form_widgets.dart';
-
 import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/screens/meter_list_screen.dart';
 
 class MeteringDetailsScreen extends StatefulWidget {
@@ -11,6 +10,24 @@ class MeteringDetailsScreen extends StatefulWidget {
   final VoidCallback onBack;
   final int? formId;
 
+  /// Optional payload assets map (typically `payload['hna']['assets']`).
+  ///
+  /// When provided, this screen will edit `assetsJson['heatMeters']`.
+  final Map<String, dynamic>? assetsJson;
+
+  /// Called when assets are changed.
+  final void Function(Map<String, dynamic> nextAssets)? onAssetsChanged;
+
+  /// Optional observations JSON (typically `payload['hna']['observations']`).
+  ///
+  /// When provided, meter-linked observations can be persisted into the single
+  /// aggregate draft doc (no per-entity draft tables).
+  final List<Map<String, dynamic>>? observationsJson;
+
+  /// Called when observations are changed.
+  final void Function(List<Map<String, dynamic>> nextObservations)?
+  onObservationsChanged;
+
   const MeteringDetailsScreen({
     super.key,
     required this.formData,
@@ -18,6 +35,10 @@ class MeteringDetailsScreen extends StatefulWidget {
     required this.onNext,
     required this.onBack,
     this.formId,
+    this.assetsJson,
+    this.onAssetsChanged,
+    this.observationsJson,
+    this.onObservationsChanged,
   });
 
   @override
@@ -192,7 +213,8 @@ class _MeteringDetailsScreenState extends State<MeteringDetailsScreen> {
                     : ListView.separated(
                         shrinkWrap: true,
                         itemCount: meters.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        separatorBuilder: (context, index) =>
+                            const Divider(height: 1),
                         itemBuilder: (context, i) {
                           final m = meters[i];
                           final make = (m['make'] ?? '').toString();
@@ -255,7 +277,9 @@ class _MeteringDetailsScreenState extends State<MeteringDetailsScreen> {
   }
 
   void _onManageMeters() {
-    if (widget.formId == null) {
+    final canEditAssets =
+        widget.assetsJson != null && widget.onAssetsChanged != null;
+    if (widget.formId == null && !canEditAssets) {
       _editMetersInMemory(key: _bulkMetersKey, title: 'Bulk Heat Meters');
       return;
     }
@@ -267,6 +291,10 @@ class _MeteringDetailsScreenState extends State<MeteringDetailsScreen> {
           arguments: {
             'formId': widget.formId,
             'networkType': 'Bulk Heat Meter',
+            'assetsJson': widget.assetsJson,
+            'onAssetsChanged': widget.onAssetsChanged,
+            'observationsJson': widget.observationsJson,
+            'onObservationsChanged': widget.onObservationsChanged,
           },
         ),
       ),
@@ -274,7 +302,9 @@ class _MeteringDetailsScreenState extends State<MeteringDetailsScreen> {
   }
 
   void _onManageBlockMeters() {
-    if (widget.formId == null) {
+    final canEditAssets =
+        widget.assetsJson != null && widget.onAssetsChanged != null;
+    if (widget.formId == null && !canEditAssets) {
       _editMetersInMemory(key: _blockMetersKey, title: 'Block Level Meters');
       return;
     }
@@ -286,6 +316,10 @@ class _MeteringDetailsScreenState extends State<MeteringDetailsScreen> {
           arguments: {
             'formId': widget.formId,
             'networkType': 'Block Level Meter',
+            'assetsJson': widget.assetsJson,
+            'onAssetsChanged': widget.onAssetsChanged,
+            'observationsJson': widget.observationsJson,
+            'onObservationsChanged': widget.onObservationsChanged,
           },
         ),
       ),

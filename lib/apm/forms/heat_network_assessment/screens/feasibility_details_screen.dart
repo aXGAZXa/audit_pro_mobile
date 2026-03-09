@@ -1,10 +1,9 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import '../../../components/app_info_panel.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
+import '../../../services/platform/image_persistence.dart';
 
 class FeasibilityDetailsScreen extends StatefulWidget {
   const FeasibilityDetailsScreen({super.key});
@@ -64,27 +63,7 @@ class _FeasibilityDetailsScreenState extends State<FeasibilityDetailsScreen> {
   }
 
   Future<void> _saveAndClose() async {
-    // Return data to previous screen
-    final imagePaths = <String>[];
-
-    // Save images to persistent storage if needed, or pass back paths
-    // For this simple implementation, we assume we just pass back the paths
-    // In a real app, you might want to save them to the app's document directory here if they are temp files
-
-    final appDir = await getApplicationDocumentsDirectory();
-
-    for (var image in _images) {
-      if (!image.path.contains(appDir.path)) {
-        // It's a temp file, copy it
-        final fileName = image.name;
-        final savedImage = await File(
-          image.path,
-        ).copy('${appDir.path}/$fileName');
-        imagePaths.add(savedImage.path);
-      } else {
-        imagePaths.add(image.path);
-      }
-    }
+    final imagePaths = await persistPickedImagePaths(_images, prefix: 'feas');
 
     if (mounted) {
       Navigator.pop(context, {
@@ -158,8 +137,8 @@ class _FeasibilityDetailsScreenState extends State<FeasibilityDetailsScreen> {
                         children: [
                           ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: Image.file(
-                              File(_images[index].path),
+                            child: AppResolvedImage(
+                              imagePath: _images[index].path,
                               fit: BoxFit.cover,
                             ),
                           ),

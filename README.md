@@ -24,6 +24,18 @@ Pre-auth mobile auth endpoints (`/api/mobile/auth/request-otp`, `verify-otp`, `t
 2. Run with the admin portal URL:
 	- `flutter run -d emulator-5554 --dart-define-from-file=auditpromobile.defines.json`
 
+## Install on device (release)
+
+If you install/build without Dart defines, the app will show:
+"App is not configured (missing API key)."
+
+- Build and install a release APK with defines:
+	- `flutter build apk --release --build-number=<int> --dart-define-from-file=auditpromobile.defines.json`
+	- `flutter install --release -d <device-id> --use-application-binary=build/app/outputs/flutter-apk/app-release.apk`
+
+- Or use the helper:
+	- `./tools/install_apm_android_release.ps1 -DeviceId <device-id> [-BuildNumber <int>]`
+
 If you want to point at a local portal API instead, create another env file with:
 `APM_API_BASE_URL=http://10.0.2.2:5168`
 

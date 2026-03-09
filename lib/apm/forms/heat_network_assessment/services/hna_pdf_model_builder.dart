@@ -11,6 +11,7 @@ class HnaPdfModelBuilder {
     required String reportNumber,
     required Map<String, dynamic> formData,
     required Map<String, dynamic> assetsJson,
+    required List<Map<String, dynamic>> observationsJson,
     required List<Map<String, dynamic>> unsafeObservationsJson,
     required List<Map<String, dynamic>> unsafeReportsJson,
     required List<Map<String, dynamic>> attachments,
@@ -111,6 +112,10 @@ class HnaPdfModelBuilder {
         'Yes',
       ),
 
+      // Template section visibility (computed after assets are populated)
+      'HideMeteringSection': false,
+      'HideDwellingInspectionsSection': false,
+
       // System overview (template uses Question + Reason + DHW plant answer)
       'CommunalPipeworkQuestion': 'Communal pipework insulation',
       'CommunalPipeworkReason': _buildPipeworkReason(formData),
@@ -166,6 +171,7 @@ class HnaPdfModelBuilder {
 
       // Unsafe
       'UnsafeSituations': <Map<String, dynamic>>[],
+      'UnsafeReports': <Map<String, dynamic>>[],
     };
 
     model['HasSiteRepSignature'] =
@@ -178,17 +184,188 @@ class HnaPdfModelBuilder {
       imageIdListFromLocalPathList: idList,
     );
 
+    final bulkMeters = (model['BulkMeters'] as List?) ?? const [];
+    final blockMeters = (model['BlockMeters'] as List?) ?? const [];
+    final hasRecordedMeters = bulkMeters.isNotEmpty || blockMeters.isNotEmpty;
+    final isHeatNetwork = model['IsHeatNetwork'] == true;
+    model['HideMeteringSection'] = !isHeatNetwork && !hasRecordedMeters;
+
+    final numDwellings =
+        int.tryParse(_getIntAsString(formData, 'numDwellings')) ?? 0;
+    model['HideDwellingInspectionsSection'] = numDwellings <= 0;
+
+    _populateObservations(
+      model: model,
+      observationsJson: observationsJson,
+      imageIdListFromLocalPathList: idList,
+      unsafeObservationIds: unsafeObservationsJson
+          .map((o) => (o['id'] ?? '').toString().trim())
+          .where((id) => id.isNotEmpty)
+          .toSet(),
+      unsafeReportsJson: unsafeReportsJson,
+    );
+
     _populatePdfDerived(model: model, formData: formData);
 
-    _populateUnsafeSituations(
+    _populateSystemOverview(model: model, formData: formData);
+
+    _populateUnsafeReports(
       model: model,
       unsafeObservationsJson: unsafeObservationsJson,
       unsafeReportsJson: unsafeReportsJson,
       imageIdFromLocalPath: idOrEmpty,
-      imageIdListFromLocalPathList: idList,
     );
 
     return model;
+  }
+
+  static void _populateObservations({
+    required Map<String, dynamic> model,
+    required List<Map<String, dynamic>> observationsJson,
+    required List<String> Function(dynamic) imageIdListFromLocalPathList,
+    required Set<String> unsafeObservationIds,
+    required List<Map<String, dynamic>> unsafeReportsJson,
+  }) {
+    // Index meter maps by reference so we can attach meter-specific observations.
+    final meterRefById = <String, Map>{};
+
+    void indexRefs(dynamic list) {
+      if (list is! List) return;
+      for (final item in list) {
+        if (item is! Map) continue;
+        final id = (item['Id'] ?? '').toString().trim();
+        if (id.isNotEmpty) {
+          meterRefById[id] = item;
+        }
+      }
+    }
+
+    indexRefs(model['BulkMeters']);
+    indexRefs(model['BlockMeters']);
+
+    // Index dwelling inspections so we can attach observations under the correct dwelling.
+    final dwellingById = <String, Map>{};
+    final dwellings = model['DwellingInspections'];
+    if (dwellings is List) {
+      for (final item in dwellings) {
+        if (item is! Map) continue;
+        final id = (item['Id'] ?? '').toString().trim();
+        if (id.isNotEmpty) dwellingById[id] = item;
+      }
+    }
+
+    // Best-effort map: unsafe observation id -> action taken (from unsafe reports).
+    final actionByUnsafeObsId = <String, String>{};
+    for (final r in unsafeReportsJson) {
+      final action = (r['actionTaken'] ?? '').toString().trim();
+      if (action.isEmpty) continue;
+      final ids = _parseObservationIds(r['observationIds']);
+      for (final id in ids) {
+        if (id.trim().isEmpty) continue;
+        actionByUnsafeObsId[id] = action;
+      }
+    }
+
+    final communalSpaceHeating = <Map<String, dynamic>>[];
+    final communalPipework = <Map<String, dynamic>>[];
+
+    for (final o in observationsJson) {
+      final obsId = (o['id'] ?? '').toString().trim();
+      final isUnsafe = unsafeObservationIds.contains(obsId);
+
+      final ref = (o['questionReference'] ?? o['question_reference'] ?? '')
+          .toString()
+          .trim();
+      if (ref.isEmpty) continue;
+
+      final questionText = (o['questionText'] ?? o['question_text'] ?? '')
+          .toString();
+      final notes = (o['notes'] ?? '').toString();
+      final unsafeClass =
+          (o['unsafe_classification'] ??
+                  o['unsafeClassification'] ??
+                  o['unsafeClassificationCode'] ??
+                  '')
+              .toString()
+              .trim();
+
+      String formattedNotes = notes;
+      String? unsafeActionTaken;
+      if (isUnsafe) {
+        final prefix = unsafeClass.isNotEmpty
+            ? 'UNSAFE ($unsafeClass): '
+            : 'UNSAFE: ';
+        formattedNotes = '$prefix$formattedNotes'.trim();
+
+        unsafeActionTaken = actionByUnsafeObsId[obsId];
+        if (unsafeActionTaken != null && unsafeActionTaken.trim().isNotEmpty) {
+          formattedNotes =
+              '$formattedNotes (Actions taken: ${unsafeActionTaken.trim()})';
+        }
+      }
+      final images = imageIdListFromLocalPathList(
+        o['imagePaths'] ?? o['images'],
+      );
+
+      final obsModel = <String, dynamic>{
+        'QuestionText': questionText,
+        'Notes': formattedNotes,
+        'Images': images,
+        'IsUnsafe': isUnsafe,
+        if (isUnsafe && unsafeClass.isNotEmpty)
+          'UnsafeClassification': unsafeClass,
+        if (isUnsafe &&
+            unsafeActionTaken != null &&
+            unsafeActionTaken.trim().isNotEmpty)
+          'UnsafeActionTaken': unsafeActionTaken.trim(),
+      };
+
+      // Meter observations: attach under the corresponding meter.
+      if (ref.startsWith('heat_meter_')) {
+        final fromAssetId = (o['assetId'] ?? o['asset_id'] ?? '')
+            .toString()
+            .trim();
+        final fromRef = ref.substring('heat_meter_'.length).trim();
+        final meterId = fromAssetId.isNotEmpty ? fromAssetId : fromRef;
+        final meter = meterRefById[meterId];
+        if (meter != null) {
+          final list = meter.putIfAbsent(
+            'Observations',
+            () => <Map<String, dynamic>>[],
+          );
+          if (list is List) {
+            list.add(obsModel);
+          }
+          continue;
+        }
+      }
+
+      // Key communal observation buckets used in the template.
+      if (ref == 'communal_space_heating') {
+        communalSpaceHeating.add(obsModel);
+      } else if (ref == 'communal_pipework') {
+        communalPipework.add(obsModel);
+      } else if (ref.startsWith('dwelling_')) {
+        final dwellingId = ref.substring('dwelling_'.length).trim();
+        final dwelling = dwellingById[dwellingId];
+        if (dwelling != null) {
+          final list = dwelling.putIfAbsent(
+            'Observations',
+            () => <Map<String, dynamic>>[],
+          );
+          if (list is List) {
+            list.add(obsModel);
+          }
+        }
+      }
+    }
+
+    if (communalSpaceHeating.isNotEmpty) {
+      model['CommunalSpaceHeatingObservations'] = communalSpaceHeating;
+    }
+    if (communalPipework.isNotEmpty) {
+      model['CommunalPipeworkObservations'] = communalPipework;
+    }
   }
 
   static Map<String, String> _buildAttachmentIdByLocalPath(
@@ -255,6 +432,7 @@ class HnaPdfModelBuilder {
         'OutputRating': (g['capacity'] ?? '').toString(),
         'AgeRange': (g['ageRange'] ?? '').toString(),
         'Condition': (g['condition'] ?? '').toString(),
+        'Operational': _mapOperationalState(g['operational']),
         'FuelType': (g['fuelType'] ?? '').toString(),
         'Images': imageIdListFromLocalPathList(g['imagePaths']),
       });
@@ -272,6 +450,7 @@ class HnaPdfModelBuilder {
         'Capacity': (p['capacity'] ?? '').toString(),
         'AgeRange': (p['ageRange'] ?? '').toString(),
         'Condition': (p['condition'] ?? '').toString(),
+        'Operational': _mapOperationalState(p['operational']),
         'InsulationCondition': (p['insulationCondition'] ?? '').toString(),
         'FreeOfLeaks': (p['freeOfLeaks'] ?? '').toString(),
         'HasIsolationValves': (p['hasIsolationValves'] ?? '').toString(),
@@ -293,6 +472,7 @@ class HnaPdfModelBuilder {
         'Capacity': (d['capacity'] ?? '').toString(),
         'AgeRange': (d['ageRange'] ?? '').toString(),
         'Condition': (d['condition'] ?? '').toString(),
+        'Operational': _mapOperationalState(d['operational']),
         'InsulationCondition': '',
         'Images': imageIdListFromLocalPathList(d['imagePaths']),
       });
@@ -311,6 +491,7 @@ class HnaPdfModelBuilder {
         'AgeRange': (c['ageRange'] ?? '').toString(),
         'Description': '',
         'Condition': (c['condition'] ?? '').toString(),
+        'Operational': _mapOperationalState(c['operational']),
         'Images': imageIdListFromLocalPathList(c['imagePaths']),
       });
     }
@@ -363,6 +544,22 @@ class HnaPdfModelBuilder {
     }
   }
 
+  static String _mapOperationalState(dynamic raw) {
+    final normalized = (raw ?? '').toString().trim().toLowerCase();
+    if (normalized.isEmpty) return '';
+    if (normalized == 'yes' ||
+        normalized == 'operational' ||
+        normalized == 'true') {
+      return 'Operational';
+    }
+    if (normalized == 'no' ||
+        normalized == 'not operational' ||
+        normalized == 'false') {
+      return 'Not operational';
+    }
+    return (raw ?? '').toString().trim();
+  }
+
   static void _populatePdfDerived({
     required Map<String, dynamic> model,
     required Map<String, dynamic> formData,
@@ -400,88 +597,258 @@ class HnaPdfModelBuilder {
         (pdfDerivedRaw['triageVisualCaveatStatement'] ?? '').toString();
   }
 
-  static void _populateUnsafeSituations({
+  static void _populateSystemOverview({
+    required Map<String, dynamic> model,
+    required Map<String, dynamic> formData,
+  }) {
+    String? normalizeRadiatorCondition(String? value) {
+      if (value == null) return null;
+      final v = value.trim();
+      if (v.isEmpty) return null;
+
+      if (_equalsIgnoreCase(v, 'Fitted with TRVs')) return 'fitted with TRVs';
+      if (_equalsIgnoreCase(v, 'Not fitted with TRVs')) {
+        return 'not fitted with TRVs';
+      }
+      if (_equalsIgnoreCase(v, 'Some fitted with TRVs') ||
+          _equalsIgnoreCase(v, 'Some fitted')) {
+        return 'some fitted with TRVs';
+      }
+
+      if (v.length == 1) return v.toLowerCase();
+      return v[0].toLowerCase() + v.substring(1);
+    }
+
+    String formatHumanList(List<String> items) {
+      if (items.isEmpty) return '';
+      if (items.length == 1) return items[0];
+      if (items.length == 2) return '${items[0]} and ${items[1]}';
+      return '${items.sublist(0, items.length - 1).join(', ')}, and ${items.last}';
+    }
+
+    // Heat (communal space heating)
+    final communalSpaceHeating = _getStringList(
+      formData,
+      'communalSpaceHeating',
+    );
+    if (communalSpaceHeating.isNotEmpty) {
+      final communalSpaceHeatingOther = _getStringOrNull(
+        formData,
+        'communalSpaceHeatingOther',
+      );
+      final communalRadiatorCondition = _getStringOrNull(
+        formData,
+        'communalRadiatorCondition',
+      );
+
+      final displayItems = <String>[];
+      for (final raw in communalSpaceHeating) {
+        var s = raw;
+        if (_equalsIgnoreCase(s, 'Other') &&
+            communalSpaceHeatingOther != null &&
+            communalSpaceHeatingOther.trim().isNotEmpty) {
+          s = 'Other (${communalSpaceHeatingOther.trim()})';
+        }
+
+        if (_equalsIgnoreCase(s, 'Radiators')) {
+          final normalized = normalizeRadiatorCondition(
+            communalRadiatorCondition,
+          );
+          s = (normalized == null || normalized.trim().isEmpty)
+              ? 'Radiators'
+              : 'Radiators (${normalized.trim()})';
+        }
+
+        if (s.trim().isNotEmpty) displayItems.add(s.trim());
+      }
+
+      model['CommunalSpaceHeatingSummary'] = displayItems.isEmpty
+          ? ''
+          : 'Communal space heating is delivered via ${formatHumanList(displayItems)}.';
+
+      // Match the old engine behavior: notes are blank (radiator condition is inlined).
+      model['CommunalSpaceHeatingNotes'] = '';
+    }
+
+    // Communal pipework insulation statement (match old engine wording)
+    final insulation =
+        (_getStringOrNull(formData, 'communalPipeworkInsulation') ?? '').trim();
+    final partCondition = _getStringOrNull(
+      formData,
+      'communalPipeworkPartInsulatedCondition',
+    );
+    final reason = _getStringOrNull(formData, 'communalPipeworkReason');
+    model['CommunalPipeworkInsulationStatement'] = _buildPipeworkStatement(
+      insulation,
+      partCondition,
+      reason,
+    );
+
+    // DHW (dedicated communal DHW plant) - match old engine wording
+    final dedicated =
+        (_getStringOrNull(formData, 'dedicatedCommunalDhwPlant') ?? '').trim();
+    final dhwSecondaryReturn = _equalsIgnoreCase(dedicated, 'Yes')
+        ? ((_getStringOrNull(formData, 'dhwSecondaryReturn') ?? '').trim())
+        : '';
+    final dhwSecondaryReturnSummary =
+        _equalsIgnoreCase(dhwSecondaryReturn, 'Yes')
+        ? 'It is fitted with a secondary return.'
+        : '';
+
+    if (dedicated.isNotEmpty) {
+      String summary;
+      if (_equalsIgnoreCase(dedicated, 'Yes')) {
+        summary = dhwSecondaryReturnSummary.isNotEmpty
+            ? 'A communal DHW system is installed at this site, and it is fitted with a secondary return.'
+            : 'A communal DHW system is installed at this site.';
+      } else if (_equalsIgnoreCase(dedicated, 'No')) {
+        summary = 'No communal DHW system was identified at this site.';
+      } else if (_equalsIgnoreCase(dedicated, 'Unknown')) {
+        summary =
+            'Unable to confirm whether a communal DHW system is installed at this site.';
+      } else {
+        summary = 'Communal DHW system was recorded as: $dedicated.';
+      }
+
+      model['DedicatedCommunalDhwPlantSummary'] = summary;
+    }
+  }
+
+  static String _buildPipeworkStatement(
+    String insulation,
+    String? partCondition,
+    String? reason,
+  ) {
+    if (insulation.trim().isEmpty &&
+        (partCondition == null || partCondition.trim().isEmpty) &&
+        (reason == null || reason.trim().isEmpty)) {
+      return '';
+    }
+
+    final ins = insulation.trim();
+    String baseSentence;
+    if (_equalsIgnoreCase(ins, 'Fully insulated')) {
+      baseSentence = 'The inspected communal pipework appears fully insulated';
+    } else if (_equalsIgnoreCase(ins, 'Part insulated')) {
+      baseSentence =
+          'The inspected communal pipework appears partially insulated';
+    } else if (_equalsIgnoreCase(ins, 'Not insulated')) {
+      baseSentence = 'The inspected communal pipework appears not insulated';
+    } else if (_equalsIgnoreCase(ins, 'Unable to Determine')) {
+      baseSentence =
+          'The inspected communal pipework insulation could not be determined';
+    } else {
+      baseSentence = ins.isEmpty
+          ? 'The inspected communal pipework insulation was recorded'
+          : 'The inspected communal pipework insulation was recorded as $ins';
+    }
+
+    final details = <String>[];
+    if (partCondition != null && partCondition.trim().isNotEmpty) {
+      details.add(_trimTrailingPunctuation(partCondition));
+    }
+    if (reason != null && reason.trim().isNotEmpty) {
+      details.add(_trimTrailingPunctuation(reason));
+    }
+
+    if (details.isEmpty) return '$baseSentence.';
+    return '$baseSentence; ${details.join('; ')}.';
+  }
+
+  static String _trimTrailingPunctuation(String value) {
+    return value.trim().replaceFirst(RegExp(r'[.\s]+$'), '');
+  }
+
+  static void _populateUnsafeReports({
     required Map<String, dynamic> model,
     required List<Map<String, dynamic>> unsafeObservationsJson,
     required List<Map<String, dynamic>> unsafeReportsJson,
     required String Function(String?) imageIdFromLocalPath,
-    required List<String> Function(dynamic) imageIdListFromLocalPathList,
   }) {
-    final actionByObsId = <int, String>{};
-    final extraImagesByObsId = <int, List<String>>{};
-
-    for (final r in unsafeReportsJson) {
-      final action = (r['actionTaken'] ?? '').toString();
-      final obsIds = _parseObservationIds(r['observationIds']);
-      for (final id in obsIds) {
-        if (action.trim().isNotEmpty) actionByObsId[id] = action;
-
-        final warningId = imageIdFromLocalPath(
-          r['warningNoticeImage']?.toString(),
-        );
-        final afterId = imageIdFromLocalPath(r['afterImage']?.toString());
-
-        final list = extraImagesByObsId.putIfAbsent(id, () => <String>[]);
-        if (warningId.isNotEmpty) list.add(warningId);
-        if (afterId.isNotEmpty) list.add(afterId);
-      }
+    final unsafeObsById = <String, Map<String, dynamic>>{};
+    for (final o in unsafeObservationsJson) {
+      final id = (o['id'] ?? '').toString().trim();
+      if (id.isNotEmpty) unsafeObsById[id] = o;
     }
 
-    for (final o in unsafeObservationsJson) {
-      final obsId = _toInt(o['id']);
+    String yesNoOrRaw(dynamic value) {
+      if (value == null) return '';
+      if (value is bool) return value ? 'Yes' : 'No';
+      if (value is num) return value != 0 ? 'Yes' : 'No';
+      return value.toString();
+    }
 
-      final images = <String>[];
-      images.addAll(imageIdListFromLocalPathList(o['imagePaths']));
+    String observationLabel(String id) {
+      final o = unsafeObsById[id];
+      if (o == null) return id;
 
-      // These are present on observations; including them makes the PDF more complete.
-      final noticeId = imageIdFromLocalPath(
-        o['unsafeWarningNoticeImage']?.toString(),
-      );
-      if (noticeId.isNotEmpty) images.add(noticeId);
-      final afterId = imageIdFromLocalPath(o['unsafeAfterImage']?.toString());
-      if (afterId.isNotEmpty) images.add(afterId);
-
-      if (obsId != null) {
-        final extra = extraImagesByObsId[obsId];
-        if (extra != null && extra.isNotEmpty) images.addAll(extra);
-      }
-
-      final location = _firstNonEmpty([
-        o['assetMakeModel']?.toString(),
+      final label = _firstNonEmpty([
         o['questionText']?.toString(),
+        o['assetMakeModel']?.toString(),
         o['sectionName']?.toString(),
-        'Unsafe observation',
       ]);
 
-      (model['UnsafeSituations'] as List).add({
-        'Location': location,
-        'Description': (o['notes'] ?? '').toString(),
-        'RiskLevel': (o['unsafeClassification'] ?? '').toString(),
-        'RemedialAction': obsId != null ? (actionByObsId[obsId] ?? '') : '',
-        'Images': images,
+      return label.trim().isEmpty ? id : label;
+    }
+
+    for (final r in unsafeReportsJson) {
+      final createdAt = (r['createdAt'] ?? r['created_at'] ?? '').toString();
+      final actionTaken = (r['actionTaken'] ?? '').toString().trim();
+
+      final obsIds = _parseObservationIds(r['observationIds']);
+      final labels = <String>[];
+      for (final id in obsIds) {
+        final trimmed = id.trim();
+        if (trimmed.isEmpty) continue;
+        labels.add(observationLabel(trimmed));
+      }
+
+      final reportedToClient = yesNoOrRaw(
+        r['reportedToClient'] ?? r['reported_to_client'],
+      );
+      final reportedInternally = yesNoOrRaw(
+        r['reportedInternally'] ?? r['reported_internally'],
+      );
+
+      final warningNoticeId = imageIdFromLocalPath(
+        r['warningNoticeImage']?.toString(),
+      );
+      final afterImageId = imageIdFromLocalPath(r['afterImage']?.toString());
+
+      (model['UnsafeReports'] as List).add({
+        'CreatedAt': createdAt,
+        'ObservationLabels': labels,
+        'ActionTaken': actionTaken,
+        'ReportedToClient': reportedToClient.toString(),
+        'ReportedInternally': reportedInternally.toString(),
+        // Portal will hydrate attachment IDs -> base64.
+        'WarningNoticeImageBase64': warningNoticeId,
+        'AfterImageBase64': afterImageId,
       });
     }
   }
 
-  static List<int> _parseObservationIds(dynamic value) {
+  static List<String> _parseObservationIds(dynamic value) {
     if (value is List) {
       return value
-          .map((e) => _toInt(e))
-          .whereType<int>()
+          .where((e) => e != null)
+          .map((e) => e.toString().trim())
+          .where((s) => s.isNotEmpty)
           .toList(growable: false);
     }
 
     if (value is String) {
       final trimmed = value.trim();
-      if (trimmed.isEmpty) return const <int>[];
+      if (trimmed.isEmpty) return const <String>[];
 
-      // Try JSON (e.g. "[1,2]")
+      // Try JSON (e.g. "[\"id1\",\"id2\"]" or "[1,2]")
       try {
         final decoded = jsonDecode(trimmed);
         if (decoded is List) {
           return decoded
-              .map((e) => _toInt(e))
-              .whereType<int>()
+              .where((e) => e != null)
+              .map((e) => e.toString().trim())
+              .where((s) => s.isNotEmpty)
               .toList(growable: false);
         }
       } catch (_) {
@@ -489,22 +856,16 @@ class HnaPdfModelBuilder {
       }
 
       // Fallback: split on commas
-      final parts = trimmed
+      return trimmed
           .replaceAll('[', '')
           .replaceAll(']', '')
           .split(',')
           .map((p) => p.trim())
           .where((p) => p.isNotEmpty)
-          .toList();
-      final ids = <int>[];
-      for (final p in parts) {
-        final parsed = int.tryParse(p);
-        if (parsed != null) ids.add(parsed);
-      }
-      return ids;
+          .toList(growable: false);
     }
 
-    return const <int>[];
+    return const <String>[];
   }
 
   static String _buildPipeworkReason(Map<String, dynamic> formData) {
@@ -537,6 +898,9 @@ class HnaPdfModelBuilder {
     }
     if (_equalsIgnoreCase(raw, 'Communal areas only')) {
       return 'Not a heat network: Communal areas only';
+    }
+    if (_equalsIgnoreCase(raw, 'Shared accommodation (no separate premises)')) {
+      return 'Not a heat network: Shared accommodation (no separate premises / no self-contained dwellings)';
     }
     return raw;
   }
@@ -625,13 +989,5 @@ class HnaPdfModelBuilder {
       return (parsed ?? 0).toString();
     }
     return '0';
-  }
-
-  static int? _toInt(dynamic value) {
-    if (value == null) return null;
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    if (value is String) return int.tryParse(value.trim());
-    return int.tryParse(value.toString());
   }
 }

@@ -1,13 +1,12 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import '../../../database/database_helper.dart';
-import '../../../models/heat_generator.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
-import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/screens/add_heat_meter_screen.dart';
+import 'hna_observations_list_screen.dart';
+import 'package:uuid/uuid.dart';
+import 'add_heat_meter_screen.dart';
+import '../../../services/platform/image_persistence.dart';
 
 class AddHeatGeneratorScreen extends StatefulWidget {
   const AddHeatGeneratorScreen({super.key});
@@ -32,8 +31,14 @@ class _AddHeatGeneratorScreenState extends State<AddHeatGeneratorScreen> {
   final _otherTypeController = TextEditingController();
   final _otherFuelController = TextEditingController();
 
-  int? _formId;
-  HeatGenerator? _existingItem;
+  Map<String, dynamic>? _assetsJson;
+  void Function(Map<String, dynamic> nextAssets)? _onAssetsChanged;
+
+  List<Map<String, dynamic>> _observationsJson = <Map<String, dynamic>>[];
+  void Function(List<Map<String, dynamic>> nextObservations)?
+  _onObservationsChanged;
+
+  Map<String, dynamic>? _existingItem;
   String? _selectedAge;
   String? _condition;
   String? _operational;
@@ -75,132 +80,136 @@ class _AddHeatGeneratorScreenState extends State<AddHeatGeneratorScreen> {
     super.didChangeDependencies();
     final args =
         ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    if (args != null && _formId == null) {
-      _formId = args['formId'] as int?;
+    if (args == null || _assetsJson != null) return;
 
-      final rawItem = args['generator'];
-      if (rawItem is HeatGenerator) {
-        _existingItem = rawItem;
-        _loadExistingData();
-      }
+    final assets = args['assetsJson'];
+    final onAssetsChanged = args['onAssetsChanged'];
+    _assetsJson = assets is Map ? Map<String, dynamic>.from(assets) : null;
+    _onAssetsChanged = onAssetsChanged is Function
+        ? (onAssetsChanged as void Function(Map<String, dynamic>))
+        : null;
+
+    final obs = args['observationsJson'];
+    _observationsJson = obs is List
+        ? obs
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : <Map<String, dynamic>>[];
+    final onObsChanged = args['onObservationsChanged'];
+    _onObservationsChanged = onObsChanged is Function
+        ? (onObsChanged as void Function(List<Map<String, dynamic>>))
+        : null;
+
+    final rawItem = args['generator'];
+    if (rawItem is Map) {
+      _existingItem = Map<String, dynamic>.from(rawItem);
+      _loadExistingData();
     }
   }
 
   void _loadExistingData() {
     if (_existingItem == null) return;
 
-    _makeController.text = _existingItem!.make;
-    _modelController.text = _existingItem!.model;
-    _locationController.text = _existingItem!.location;
-    _selectedAge = _normalizeAgeBand(_existingItem!.ageRange);
-    _serialNumberController.text = _existingItem!.serialNumber ?? '';
-    _capacityController.text = _existingItem!.capacity ?? '';
-    _condition = _existingItem!.condition.isEmpty
-        ? null
-        : _existingItem!.condition;
-    _operational = _existingItem!.operational;
-    _hasIndividualMeter = _existingItem!.hasIndividualMeter;
+    _makeController.text = (_existingItem!['make'] ?? '').toString();
+    _modelController.text = (_existingItem!['model'] ?? '').toString();
+    _locationController.text = (_existingItem!['location'] ?? '').toString();
+    _selectedAge = _normalizeAgeBand(
+      (_existingItem!['ageRange'] ?? '').toString(),
+    );
+    _serialNumberController.text = (_existingItem!['serialNumber'] ?? '')
+        .toString();
+    _capacityController.text = (_existingItem!['capacity'] ?? '').toString();
+    final conditionRaw = (_existingItem!['condition'] ?? '').toString();
+    _condition = conditionRaw.trim().isEmpty ? null : conditionRaw;
+    final operationalRaw = (_existingItem!['operational'] ?? '').toString();
+    _operational = operationalRaw.trim().isEmpty ? null : operationalRaw;
+    final hasMeterRaw = (_existingItem!['hasIndividualMeter'] ?? '').toString();
+    _hasIndividualMeter = hasMeterRaw.trim().isEmpty ? null : hasMeterRaw;
 
     // Handle Type logic
-    if (_generatorTypes.contains(_existingItem!.generatorType)) {
-      _selectedType = _existingItem!.generatorType;
+    final existingType = (_existingItem!['generatorType'] ?? '').toString();
+    if (_generatorTypes.contains(existingType)) {
+      _selectedType = existingType;
       _isOtherType =
           _selectedType ==
           'Other'; // Should essentially never be true if saved correctly but safe check
     } else {
       _selectedType = 'Other';
       _isOtherType = true;
-      _otherTypeController.text = _existingItem!.generatorType;
+      _otherTypeController.text = existingType;
     }
 
     // Handle Fuel logic
-    if (_fuelTypes.contains(_existingItem!.fuelType)) {
-      _selectedFuel = _existingItem!.fuelType;
+    final existingFuel = (_existingItem!['fuelType'] ?? '').toString();
+    if (_fuelTypes.contains(existingFuel)) {
+      _selectedFuel = existingFuel;
       _isOtherFuel = _selectedFuel == 'Other';
     } else {
       _selectedFuel = 'Other';
       _isOtherFuel = true;
-      _otherFuelController.text = _existingItem!.fuelType;
+      _otherFuelController.text = existingFuel;
     }
 
-    if (_existingItem!.imagePaths.isNotEmpty) {
-      _images = _existingItem!.imagePaths.map((path) => XFile(path)).toList();
+    final imagePaths = _existingItem!['imagePaths'];
+    if (imagePaths is List) {
+      _images = imagePaths
+          .map((e) => e.toString())
+          .where((p) => p.trim().isNotEmpty)
+          .map((p) => XFile(p))
+          .toList(growable: true);
     }
     _loadObservationCount();
     _checkLinkedMeter();
   }
 
   Future<void> _checkLinkedMeter() async {
-    if (_existingItem == null || _existingItem!.id == null) return;
+    final id = (_existingItem?['id'] ?? '').toString().trim();
+    final assets = _assetsJson;
+    if (id.isEmpty || assets == null) return;
 
-    final meter = await DatabaseHelper.instance.getHeatMeterByRelatedAsset(
-      _formId!,
-      'Heat Generator',
-      _existingItem!.id!,
-    );
+    final metersRaw = assets['heatMeters'];
+    final meters = metersRaw is List
+        ? metersRaw
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : <Map<String, dynamic>>[];
 
-    if (mounted) {
-      setState(() {
-        _hasLinkedMeter = meter != null;
-      });
-    }
+    final found = meters.any((m) {
+      final t = (m['relatedAssetType'] ?? '').toString();
+      final rid = (m['relatedAssetId'] ?? '').toString();
+      return t == 'Heat Generator' && rid == id;
+    });
+
+    if (!mounted) return;
+    setState(() => _hasLinkedMeter = found);
   }
 
   Future<void> _loadObservationCount() async {
-    if (_existingItem == null || _existingItem!.id == null) return;
+    final id = (_existingItem?['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
 
-    final id = _existingItem!.id!;
-    final db = DatabaseHelper.instance;
-    final observations = await db.getQuestionObservations(_formId!, 'gen_$id');
+    final ref = 'gen_$id';
+    final count = _observationsJson.where((o) {
+      final oRef = (o['questionReference'] ?? o['question_reference'] ?? '')
+          .toString()
+          .trim();
+      return oRef == ref;
+    }).length;
 
     if (!mounted) return;
-    setState(() {
-      _observationCount = observations.length;
-    });
+    setState(() => _observationCount = count);
   }
 
   Future<void> _manageHeatMeter() async {
-    // Save first if needed
-    if (_existingItem == null || _existingItem!.id == null) {
-      final success = await _saveInternal(
-        validateMeter: false,
-        requireImage: false,
-      );
-      if (!success) return;
-    }
+    final assets = _assetsJson;
+    final onAssetsChanged = _onAssetsChanged;
+    if (assets == null || onAssetsChanged == null) return;
 
-    // Check again if we have a linked meter
-    final meter = await DatabaseHelper.instance.getHeatMeterByRelatedAsset(
-      _formId!,
-      'Heat Generator',
-      _existingItem!.id!,
-    );
-
-    if (!mounted) return;
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => const AddHeatMeterScreen(),
-        settings: RouteSettings(
-          arguments: {
-            'formId': _formId,
-            'meterType': 'Heat Generator Meter',
-            'relatedAssetType': 'Heat Generator',
-            'relatedAssetId': _existingItem!.id,
-            'meter': meter, // Pass existing meter if found
-          },
-        ),
-      ),
-    );
-
-    // Refresh state when back
-    _checkLinkedMeter();
-  }
-
-  Future<void> _viewObservations() async {
-    // If no ID exists, try to save first
-    if (_existingItem == null || _existingItem!.id == null) {
+    // Ensure generator exists (stable id for relatedAssetId)
+    if (_existingItem == null ||
+        (_existingItem!['id'] ?? '').toString().trim().isEmpty) {
       final success = await _saveInternal(
         validateMeter: false,
         requireImage: false,
@@ -209,27 +218,94 @@ class _AddHeatGeneratorScreenState extends State<AddHeatGeneratorScreen> {
       if (!mounted) return;
     }
 
-    if (_existingItem?.id == null) return;
+    final genId = (_existingItem?['id'] ?? '').toString().trim();
+    if (genId.isEmpty) return;
+
+    final metersRaw = assets['heatMeters'];
+    final meters = metersRaw is List
+        ? metersRaw
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : <Map<String, dynamic>>[];
+
+    final existingIndex = meters.indexWhere((m) {
+      final t = (m['relatedAssetType'] ?? '').toString();
+      final rid = (m['relatedAssetId'] ?? '').toString();
+      return t == 'Heat Generator' && rid == genId;
+    });
+    final existingMeter = existingIndex >= 0 ? meters[existingIndex] : null;
 
     if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const AddHeatMeterScreen(),
+        settings: RouteSettings(
+          arguments: {
+            'formId': null,
+            'meterType': 'Heat Generator Meter',
+            'meter': existingMeter,
+            'relatedAssetType': 'Heat Generator',
+            'relatedAssetId': genId,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': (Map<String, dynamic> nextAssets) {
+              onAssetsChanged(nextAssets);
+              _assetsJson = nextAssets;
+            },
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': (List<Map<String, dynamic>> next) {
+              _observationsJson = next;
+              _onObservationsChanged?.call(next);
+            },
+          },
+        ),
+      ),
+    );
 
-    final genId = _existingItem!.id!;
+    _checkLinkedMeter();
+  }
+
+  Future<void> _viewObservations() async {
+    final onObsChanged = _onObservationsChanged;
+    if (onObsChanged == null) return;
+
+    // Ensure generator exists (stable id for questionReference)
+    if (_existingItem == null ||
+        (_existingItem!['id'] ?? '').toString().trim().isEmpty) {
+      final success = await _saveInternal(
+        validateMeter: false,
+        requireImage: false,
+      );
+      if (!success) return;
+      if (!mounted) return;
+    }
+
+    final genId = (_existingItem?['id'] ?? '').toString().trim();
+    if (genId.isEmpty) return;
+
     final ref = 'gen_$genId';
     final makeModel = '${_makeController.text} ${_modelController.text}'.trim();
 
-    await Navigator.pushNamed(
-      context,
-      '/observations-list',
-      arguments: {
-        'formId': _formId,
-        'questionReference': ref,
-        'questionText':
-            '${_getFinalType()} Generator${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
-        'sectionName': 'Heat Generators',
-        'assetId': genId,
-        'assetType': 'Heat Generator',
-        'assetMakeModel': makeModel.isEmpty ? null : makeModel,
-      },
+    final navigator = Navigator.of(context);
+
+    await navigator.push(
+      MaterialPageRoute(
+        builder: (context) => HnaObservationsListScreen(
+          observationsJson: _observationsJson,
+          onObservationsChanged: (next) {
+            _observationsJson = next;
+            onObsChanged(next);
+          },
+          questionReference: ref,
+          questionText:
+              '${_getFinalType()} Generator${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
+          sectionName: 'Heat Generators',
+          assetId: genId,
+          assetType: 'Heat Generator',
+          assetMakeModel: makeModel.isEmpty ? null : makeModel,
+        ),
+      ),
     );
 
     if (!mounted) return;
@@ -275,7 +351,10 @@ class _AddHeatGeneratorScreenState extends State<AddHeatGeneratorScreen> {
   Future<void> _saveAndClose() async {
     final success = await _saveInternal();
     if (success && mounted) {
-      Navigator.pop(context);
+      final saved = _existingItem == null
+          ? null
+          : Map<String, dynamic>.from(_existingItem!);
+      Navigator.pop(context, saved);
     }
   }
 
@@ -329,21 +408,7 @@ class _AddHeatGeneratorScreenState extends State<AddHeatGeneratorScreen> {
       await _modelFieldKey.currentState?.saveSuggestion();
       await _locationFieldKey.currentState?.saveSuggestion();
 
-      final List<String> imagePaths = [];
-      final appDir = await getApplicationDocumentsDirectory();
-
-      for (final image in _images) {
-        final path = image.path;
-        if (path.startsWith(appDir.path)) {
-          imagePaths.add(path);
-        } else {
-          final fileName =
-              'gen_${DateTime.now().millisecondsSinceEpoch}_${imagePaths.length}.jpg';
-          final savedImage = File('${appDir.path}/$fileName');
-          await File(path).copy(savedImage.path);
-          imagePaths.add(savedImage.path);
-        }
-      }
+      final imagePaths = await persistPickedImagePaths(_images, prefix: 'hg');
 
       String toCamelCase(String text) {
         if (text.isEmpty) return text;
@@ -356,53 +421,67 @@ class _AddHeatGeneratorScreenState extends State<AddHeatGeneratorScreen> {
             .join(' ');
       }
 
-      final item = HeatGenerator(
-        id: _existingItem?.id,
-        formId: _formId!,
-        generatorType: _getFinalType(),
-        fuelType: _getFinalFuel(),
-        location: toCamelCase(_locationController.text.trim()),
-        make: toCamelCase(_makeController.text.trim()),
-        model: _modelController.text.trim(),
-        serialNumber: _serialNumberController.text.trim().isEmpty
+      final assets = _assetsJson;
+      final onAssetsChanged = _onAssetsChanged;
+      if (assets == null || onAssetsChanged == null) {
+        throw Exception('Missing assetsJson/onAssetsChanged');
+      }
+
+      final now = DateTime.now().toUtc().toIso8601String();
+      final existing = _existingItem;
+      final existingId = (existing?['id'] ?? '').toString().trim();
+      final id = existingId.isNotEmpty ? existingId : const Uuid().v4();
+      final existingCreatedAt = (existing?['createdAt'] ?? '')
+          .toString()
+          .trim();
+
+      final item = <String, dynamic>{
+        'id': id,
+        'generatorType': _getFinalType(),
+        'fuelType': _getFinalFuel(),
+        'location': toCamelCase(_locationController.text.trim()),
+        'make': toCamelCase(_makeController.text.trim()),
+        'model': _modelController.text.trim(),
+        'serialNumber': _serialNumberController.text.trim().isEmpty
             ? null
             : _serialNumberController.text.trim(),
-        capacity: _capacityController.text.trim().isEmpty
+        'capacity': _capacityController.text.trim().isEmpty
             ? null
             : _capacityController.text.trim(),
-        ageRange: _selectedAge!,
-        condition: _condition!,
-        operational: _operational,
-        hasIndividualMeter: _hasIndividualMeter,
-        imagePaths: imagePaths,
-        createdAt: _existingItem?.createdAt,
-        updatedAt: DateTime.now(),
-      );
+        'ageRange': _selectedAge!,
+        'condition': _condition!,
+        'operational': _operational,
+        'hasIndividualMeter': _hasIndividualMeter,
+        'imagePaths': imagePaths,
+        'createdAt': existingCreatedAt.isNotEmpty ? existingCreatedAt : now,
+        'updatedAt': now,
+      };
 
-      final savedId = await DatabaseHelper.instance.saveHeatGenerator(item);
+      final raw = assets['heatGenerators'];
+      final list = raw is List
+          ? raw
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList(growable: true)
+          : <Map<String, dynamic>>[];
 
-      // Update the existing item with the new ID and data
-      if (mounted) {
-        setState(() {
-          _existingItem = HeatGenerator(
-            id: savedId,
-            formId: item.formId,
-            generatorType: item.generatorType,
-            fuelType: item.fuelType,
-            location: item.location,
-            make: item.make,
-            model: item.model,
-            serialNumber: item.serialNumber,
-            capacity: item.capacity,
-            ageRange: item.ageRange,
-            condition: item.condition,
-            operational: item.operational,
-            hasIndividualMeter: item.hasIndividualMeter,
-            imagePaths: item.imagePaths,
-          );
-          _isLoading = false;
-        });
+      final idx = list.indexWhere((g) => (g['id'] ?? '').toString() == id);
+      if (idx >= 0) {
+        list[idx] = item;
+      } else {
+        list.add(item);
       }
+
+      final nextAssets = Map<String, dynamic>.from(assets);
+      nextAssets['heatGenerators'] = list;
+      onAssetsChanged(nextAssets);
+      _assetsJson = nextAssets;
+
+      if (!mounted) return true;
+      setState(() {
+        _existingItem = item;
+        _isLoading = false;
+      });
 
       return true;
     } catch (e) {

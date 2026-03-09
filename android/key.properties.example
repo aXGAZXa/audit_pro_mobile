@@ -1,0 +1,7 @@
+# Copy to android/key.properties (do not commit the real file)
+# NOTE: Use forward slashes or double backslashes in Windows paths.
+
+storeFile=W:\\AuditProMobile\\secrets\\apm-signing\\apm-release.jks
+storePassword=CHANGE_ME
+keyAlias=apm
+keyPassword=CHANGE_ME

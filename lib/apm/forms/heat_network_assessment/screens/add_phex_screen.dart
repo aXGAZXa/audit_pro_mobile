@@ -1,14 +1,12 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import '../../../database/database_helper.dart';
-import '../../../models/plate_heat_exchanger.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
-
-import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/screens/add_heat_meter_screen.dart';
+import 'hna_observations_list_screen.dart';
+import 'package:uuid/uuid.dart';
+import 'add_heat_meter_screen.dart';
+import '../../../services/platform/image_persistence.dart';
 
 class AddPhexScreen extends StatefulWidget {
   const AddPhexScreen({super.key});
@@ -29,8 +27,14 @@ class _AddPhexScreenState extends State<AddPhexScreen> {
   final _serialNumberController = TextEditingController();
   final _capacityController = TextEditingController();
 
-  int? _formId;
-  PlateHeatExchanger? _existingItem;
+  Map<String, dynamic>? _assetsJson;
+  void Function(Map<String, dynamic> nextAssets)? _onAssetsChanged;
+
+  List<Map<String, dynamic>> _observationsJson = <Map<String, dynamic>>[];
+  void Function(List<Map<String, dynamic>> nextObservations)?
+  _onObservationsChanged;
+
+  Map<String, dynamic>? _existingItem;
   String? _selectedAge;
   String? _condition;
   String? _insulationCondition;
@@ -47,137 +51,206 @@ class _AddPhexScreenState extends State<AddPhexScreen> {
     super.didChangeDependencies();
     final args =
         ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    if (args != null && _formId == null) {
-      _formId = args['formId'] as int?;
+    if (args == null || _assetsJson != null) return;
 
-      final rawItem = args['phex'];
-      if (rawItem is PlateHeatExchanger) {
-        _existingItem = rawItem;
-        _loadExistingData();
-      }
+    final assets = args['assetsJson'];
+    final onAssetsChanged = args['onAssetsChanged'];
+    _assetsJson = assets is Map ? Map<String, dynamic>.from(assets) : null;
+    _onAssetsChanged = onAssetsChanged is Function
+        ? (onAssetsChanged as void Function(Map<String, dynamic>))
+        : null;
+
+    final obs = args['observationsJson'];
+    _observationsJson = obs is List
+        ? obs
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : <Map<String, dynamic>>[];
+    final onObsChanged = args['onObservationsChanged'];
+    _onObservationsChanged = onObsChanged is Function
+        ? (onObsChanged as void Function(List<Map<String, dynamic>>))
+        : null;
+
+    final rawItem = args['phex'];
+    if (rawItem is Map) {
+      _existingItem = Map<String, dynamic>.from(rawItem);
+      _loadExistingData();
     }
   }
 
   void _loadExistingData() {
     if (_existingItem == null) return;
 
-    _makeController.text = _existingItem!.make;
-    _modelController.text = _existingItem!.model;
-    _locationController.text = _existingItem!.location;
-    _selectedAge = _normalizeAgeBand(_existingItem!.ageRange);
-    _serialNumberController.text = _existingItem!.serialNumber ?? '';
-    _capacityController.text = _existingItem!.capacity ?? '';
-    _condition = _existingItem!.condition;
-    _insulationCondition = _existingItem!.insulationCondition;
-    _hasIndividualMeter = _existingItem!.hasIndividualMeter;
+    _makeController.text = (_existingItem!['make'] ?? '').toString();
+    _modelController.text = (_existingItem!['model'] ?? '').toString();
+    _locationController.text = (_existingItem!['location'] ?? '').toString();
+    _selectedAge = _normalizeAgeBand(
+      (_existingItem!['ageRange'] ?? '').toString(),
+    );
+    _serialNumberController.text = (_existingItem!['serialNumber'] ?? '')
+        .toString();
+    _capacityController.text = (_existingItem!['capacity'] ?? '').toString();
+    final conditionRaw = (_existingItem!['condition'] ?? '').toString();
+    _condition = conditionRaw.trim().isEmpty ? null : conditionRaw;
+    final insulationRaw = (_existingItem!['insulationCondition'] ?? '')
+        .toString();
+    _insulationCondition = insulationRaw.trim().isEmpty ? null : insulationRaw;
+    final hasMeterRaw = (_existingItem!['hasIndividualMeter'] ?? '').toString();
+    _hasIndividualMeter = hasMeterRaw.trim().isEmpty ? null : hasMeterRaw;
 
-    if (_existingItem!.imagePaths.isNotEmpty) {
-      _images = _existingItem!.imagePaths.map((path) => XFile(path)).toList();
+    final imagePaths = _existingItem!['imagePaths'];
+    if (imagePaths is List) {
+      _images = imagePaths
+          .map((e) => e.toString())
+          .where((p) => p.trim().isNotEmpty)
+          .map((p) => XFile(p))
+          .toList(growable: true);
     }
     _loadObservationCount();
     _checkLinkedMeter();
   }
 
   Future<void> _checkLinkedMeter() async {
-    if (_existingItem == null || _existingItem!.id == null) return;
+    final id = (_existingItem?['id'] ?? '').toString().trim();
+    final assets = _assetsJson;
+    if (id.isEmpty || assets == null) return;
 
-    final meter = await DatabaseHelper.instance.getHeatMeterByRelatedAsset(
-      _formId!,
-      'Plate Heat Exchanger',
-      _existingItem!.id!,
-    );
+    final metersRaw = assets['heatMeters'];
+    final meters = metersRaw is List
+        ? metersRaw
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : <Map<String, dynamic>>[];
 
-    if (mounted) {
-      setState(() {
-        _hasLinkedMeter = meter != null;
-      });
-    }
+    final found = meters.any((m) {
+      final t = (m['relatedAssetType'] ?? '').toString();
+      final rid = (m['relatedAssetId'] ?? '').toString();
+      return t == 'Plate Heat Exchanger' && rid == id;
+    });
+
+    if (!mounted) return;
+    setState(() => _hasLinkedMeter = found);
   }
 
   Future<void> _loadObservationCount() async {
-    if (_existingItem == null || _existingItem!.id == null) return;
+    final id = (_existingItem?['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
 
-    final id = _existingItem!.id!;
-    final db = DatabaseHelper.instance;
-    final observations = await db.getQuestionObservations(_formId!, 'phex_$id');
+    final ref = 'phex_$id';
+    final count = _observationsJson.where((o) {
+      final oRef = (o['questionReference'] ?? o['question_reference'] ?? '')
+          .toString()
+          .trim();
+      return oRef == ref;
+    }).length;
 
     if (!mounted) return;
-    setState(() {
-      _observationCount = observations.length;
-    });
+    setState(() => _observationCount = count);
   }
 
   Future<void> _manageHeatMeter() async {
-    // Save first if needed
-    if (_existingItem == null || _existingItem!.id == null) {
+    final assets = _assetsJson;
+    final onAssetsChanged = _onAssetsChanged;
+    if (assets == null || onAssetsChanged == null) return;
+
+    if (_existingItem == null ||
+        (_existingItem!['id'] ?? '').toString().trim().isEmpty) {
       final success = await _saveInternal(
         validateMeter: false,
         requireImage: false,
       );
       if (!success) return;
+      if (!mounted) return;
     }
 
-    // Check again if we have a linked meter
-    final meter = await DatabaseHelper.instance.getHeatMeterByRelatedAsset(
-      _formId!,
-      'Plate Heat Exchanger',
-      _existingItem!.id!,
-    );
+    final phexId = (_existingItem?['id'] ?? '').toString().trim();
+    if (phexId.isEmpty) return;
+
+    final metersRaw = assets['heatMeters'];
+    final meters = metersRaw is List
+        ? metersRaw
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList(growable: true)
+        : <Map<String, dynamic>>[];
+
+    final existingIndex = meters.indexWhere((m) {
+      final t = (m['relatedAssetType'] ?? '').toString();
+      final rid = (m['relatedAssetId'] ?? '').toString();
+      return t == 'Plate Heat Exchanger' && rid == phexId;
+    });
+    final existingMeter = existingIndex >= 0 ? meters[existingIndex] : null;
 
     if (!mounted) return;
-
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => const AddHeatMeterScreen(),
         settings: RouteSettings(
           arguments: {
-            'formId': _formId,
+            'formId': null,
             'meterType': 'PHEX Meter',
+            'meter': existingMeter,
             'relatedAssetType': 'Plate Heat Exchanger',
-            'relatedAssetId': _existingItem!.id,
-            'meter': meter, // Pass existing meter if found
+            'relatedAssetId': phexId,
+            'assetsJson': _assetsJson,
+            'onAssetsChanged': (Map<String, dynamic> nextAssets) {
+              onAssetsChanged(nextAssets);
+              _assetsJson = nextAssets;
+            },
+            'observationsJson': _observationsJson,
+            'onObservationsChanged': (List<Map<String, dynamic>> next) {
+              _observationsJson = next;
+              _onObservationsChanged?.call(next);
+            },
           },
         ),
       ),
     );
 
-    // Refresh state when back
     _checkLinkedMeter();
   }
 
   Future<void> _viewObservations() async {
-    // If no ID exists, try to save first
-    if (_existingItem == null || _existingItem!.id == null) {
+    final onObsChanged = _onObservationsChanged;
+    if (onObsChanged == null) return;
+
+    if (_existingItem == null ||
+        (_existingItem!['id'] ?? '').toString().trim().isEmpty) {
       final success = await _saveInternal(
         validateMeter: false,
         requireImage: false,
       );
-      // If save failed or was cancelled, we can't proceed to observations
       if (!success) return;
       if (!mounted) return;
     }
 
-    if (_existingItem?.id == null) return;
+    final phexId = (_existingItem?['id'] ?? '').toString().trim();
+    if (phexId.isEmpty) return;
 
-    if (!mounted) return;
-
-    final phexId = _existingItem!.id!;
     final ref = 'phex_$phexId';
     final makeModel = '${_makeController.text} ${_modelController.text}'.trim();
 
-    await Navigator.pushNamed(
-      context,
-      '/observations-list',
-      arguments: {
-        'formId': _formId,
-        'questionReference': ref,
-        'questionText': 'PHEX${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
-        'sectionName': 'Heat Generators - PHEX',
-        'assetId': phexId,
-        'assetType': 'Plate Heat Exchanger',
-        'assetMakeModel': makeModel.isEmpty ? null : makeModel,
-      },
+    final navigator = Navigator.of(context);
+
+    await navigator.push(
+      MaterialPageRoute(
+        builder: (context) => HnaObservationsListScreen(
+          observationsJson: _observationsJson,
+          onObservationsChanged: (next) {
+            _observationsJson = next;
+            onObsChanged(next);
+          },
+          questionReference: ref,
+          questionText: 'PHEX${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
+          sectionName: 'Heat Generators - PHEX',
+          assetId: phexId,
+          assetType: 'Plate Heat Exchanger',
+          assetMakeModel: makeModel.isEmpty ? null : makeModel,
+        ),
+      ),
     );
 
     if (!mounted) return;
@@ -187,7 +260,10 @@ class _AddPhexScreenState extends State<AddPhexScreen> {
   Future<void> _saveAndClose() async {
     final success = await _saveInternal();
     if (success && mounted) {
-      Navigator.pop(context);
+      final saved = _existingItem == null
+          ? null
+          : Map<String, dynamic>.from(_existingItem!);
+      Navigator.pop(context, saved);
     }
   }
 
@@ -241,21 +317,7 @@ class _AddPhexScreenState extends State<AddPhexScreen> {
       await _modelFieldKey.currentState?.saveSuggestion();
       await _locationFieldKey.currentState?.saveSuggestion();
 
-      final List<String> imagePaths = [];
-      final appDir = await getApplicationDocumentsDirectory();
-
-      for (final image in _images) {
-        final path = image.path;
-        if (path.startsWith(appDir.path)) {
-          imagePaths.add(path);
-        } else {
-          final fileName =
-              'phex_${DateTime.now().millisecondsSinceEpoch}_${imagePaths.length}.jpg';
-          final savedImage = File('${appDir.path}/$fileName');
-          await File(path).copy(savedImage.path);
-          imagePaths.add(savedImage.path);
-        }
-      }
+      final imagePaths = await persistPickedImagePaths(_images, prefix: 'phex');
 
       String toCamelCase(String text) {
         if (text.isEmpty) return text;
@@ -268,55 +330,65 @@ class _AddPhexScreenState extends State<AddPhexScreen> {
             .join(' ');
       }
 
-      final item = PlateHeatExchanger(
-        id: _existingItem?.id,
-        formId: _formId!,
-        location: toCamelCase(_locationController.text.trim()),
-        make: toCamelCase(_makeController.text.trim()),
-        model: _modelController.text.trim(),
-        serialNumber: _serialNumberController.text.trim().isEmpty
+      final assets = _assetsJson;
+      final onAssetsChanged = _onAssetsChanged;
+      if (assets == null || onAssetsChanged == null) {
+        throw Exception('Missing assetsJson/onAssetsChanged');
+      }
+
+      final now = DateTime.now().toUtc().toIso8601String();
+      final existing = _existingItem;
+      final existingId = (existing?['id'] ?? '').toString().trim();
+      final id = existingId.isNotEmpty ? existingId : const Uuid().v4();
+      final existingCreatedAt = (existing?['createdAt'] ?? '')
+          .toString()
+          .trim();
+
+      final item = <String, dynamic>{
+        'id': id,
+        'location': toCamelCase(_locationController.text.trim()),
+        'make': toCamelCase(_makeController.text.trim()),
+        'model': _modelController.text.trim(),
+        'serialNumber': _serialNumberController.text.trim().isEmpty
             ? null
             : _serialNumberController.text.trim(),
-        capacity: _capacityController.text.trim().isEmpty
+        'capacity': _capacityController.text.trim().isEmpty
             ? null
             : _capacityController.text.trim(),
-        ageRange: _selectedAge!,
-        condition: _condition!,
-        insulationCondition: _insulationCondition,
-        hasIndividualMeter: _hasIndividualMeter, // Save the new field
-        imagePaths: imagePaths,
-        createdAt: _existingItem?.createdAt,
-        updatedAt: DateTime.now(),
-      );
+        'ageRange': _selectedAge!,
+        'condition': _condition!,
+        'insulationCondition': _insulationCondition,
+        'hasIndividualMeter': _hasIndividualMeter,
+        'imagePaths': imagePaths,
+        'createdAt': existingCreatedAt.isNotEmpty ? existingCreatedAt : now,
+        'updatedAt': now,
+      };
 
-      final savedId = await DatabaseHelper.instance.savePlateHeatExchanger(
-        item,
-      );
+      final raw = assets['plateHeatExchangers'];
+      final list = raw is List
+          ? raw
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList(growable: true)
+          : <Map<String, dynamic>>[];
 
-      // Update the existing item with the new ID and data
-      setState(() {
-        _existingItem = PlateHeatExchanger(
-          id: savedId,
-          formId: item.formId,
-          location: item.location,
-          make: item.make,
-          model: item.model,
-          serialNumber: item.serialNumber,
-          capacity: item.capacity,
-          ageRange: item.ageRange,
-          condition: item.condition,
-          insulationCondition: item.insulationCondition,
-          // Copy other optional fields that might be null in 'item' but aren't changed here
-          // (though in this form we create a fresh item object so passing what we have is correct)
-          freeOfLeaks: item.freeOfLeaks,
-          hasIsolationValves: item.hasIsolationValves,
-          hasTempGauges: item.hasTempGauges,
-          hasIndividualMeter: item.hasIndividualMeter, // This is updated
-          imagePaths: item.imagePaths,
-          createdAt: item.createdAt,
-          updatedAt: item.updatedAt,
-        );
-      });
+      final idx = list.indexWhere((p) => (p['id'] ?? '').toString() == id);
+      if (idx >= 0) {
+        list[idx] = item;
+      } else {
+        list.add(item);
+      }
+
+      final nextAssets = Map<String, dynamic>.from(assets);
+      nextAssets['plateHeatExchangers'] = list;
+      onAssetsChanged(nextAssets);
+      _assetsJson = nextAssets;
+
+      if (mounted) {
+        setState(() {
+          _existingItem = item;
+        });
+      }
 
       return true;
     } catch (e) {
