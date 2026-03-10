@@ -61,6 +61,78 @@ class ApmTestFormsApi {
     );
   }
 
+  Future<ApiResult<ApmTestFormSubmission?>> getSubmission({
+    required String token,
+    required String submissionId,
+  }) async {
+    final res = await http.get(
+      AppConfig.apiUri('/api/apm-test/forms/$submissionId'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+
+    final json = _decodeJson(res);
+    return ApiResult.fromJson<ApmTestFormSubmission?>(
+      json,
+      parseData: (d) {
+        if (d is! Map) return null;
+        return ApmTestFormSubmission.fromJson(Map<String, dynamic>.from(d));
+      },
+    );
+  }
+
+  Future<ApiResult<ApmTestFormSubmission>> updateSubmission({
+    required String token,
+    required String submissionId,
+    required String payloadJson,
+  }) async {
+    final res = await http.put(
+      AppConfig.apiUri('/api/apm-test/forms/$submissionId'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({'payloadJson': payloadJson}),
+    );
+
+    final json = _decodeJson(res);
+    return ApiResult.fromJson<ApmTestFormSubmission>(
+      json,
+      parseData: (d) {
+        if (d is! Map) return null;
+        return ApmTestFormSubmission.fromJson(Map<String, dynamic>.from(d));
+      },
+    );
+  }
+
+  Future<ApiResult<List<ApmTestFormSubmissionRevision>>> getRevisions({
+    required String token,
+    required String submissionId,
+    int take = 50,
+  }) async {
+    final res = await http.get(
+      AppConfig.apiUri(
+        '/api/apm-test/forms/$submissionId/revisions?take=$take',
+      ),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+
+    final json = _decodeJson(res);
+    return ApiResult.fromJson<List<ApmTestFormSubmissionRevision>>(
+      json,
+      parseData: (d) {
+        if (d is! List) return const [];
+        return d
+            .whereType<Map>()
+            .map(
+              (m) => ApmTestFormSubmissionRevision.fromJson(
+                Map<String, dynamic>.from(m),
+              ),
+            )
+            .toList();
+      },
+    );
+  }
+
   Map<String, dynamic> _decodeJson(http.Response response) {
     final body = response.body.trim();
     if (body.isEmpty) {

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
@@ -135,13 +136,15 @@ class HnaSubmissionService {
     final appVersion = await appInfoService.getCurrentVersion();
 
     final clientSubmissionId = _tryExtractClientSubmissionId(payload);
+    final formType = _readCanonicalFormType(payload);
 
     final requestBody = {
-      'assessment': payload,
+      'formType': formType,
+      'payloadJson': jsonEncode(payload),
       'schemaVersion': HnaSubmissionPayloadBuilder.payloadSchemaVersion,
       ...?(clientSubmissionId == null
           ? null
-          : {'clientSubmissionId': clientSubmissionId}),
+          : {'clientResponseId': clientSubmissionId}),
       'appVersion': '${appVersion.name}+${appVersion.code}',
     };
 
@@ -171,7 +174,7 @@ class HnaSubmissionService {
         json = {'Success': true, 'Message': 'Updated', 'Data': submissionId};
       } else {
         json = await apiClient.postJson(
-          '/api/hna/assessments/submit',
+          '/api/forms/submit',
           bearerToken: token,
           body: requestBody,
         );
@@ -198,7 +201,7 @@ class HnaSubmissionService {
       );
     }
 
-    final submissionId = (json['Data'] ?? json['data'])?.toString();
+    final submissionId = _readSubmissionId(json);
     if (submissionId == null || submissionId.trim().isEmpty) {
       throw PortalApiException('Submission did not return an id.');
     }
@@ -237,6 +240,30 @@ class HnaSubmissionService {
         if (_looksLikeGuid(uuid)) return uuid;
       }
     }
+
+    return null;
+  }
+
+  String _readCanonicalFormType(Map<String, dynamic> payload) {
+    final form = payload['form'];
+    if (form is Map) {
+      final value = (form['formType'] ?? '').toString().trim();
+      if (value.isNotEmpty) return value;
+    }
+
+    return 'heat_network_assessment';
+  }
+
+  String? _readSubmissionId(Map<String, dynamic> json) {
+    final data = json['Data'] ?? json['data'];
+    if (data is Map) {
+      final responseId = data['responseId'] ?? data['ResponseId'];
+      final value = responseId?.toString().trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+
+    final direct = data?.toString().trim();
+    if (direct != null && direct.isNotEmpty) return direct;
 
     return null;
   }

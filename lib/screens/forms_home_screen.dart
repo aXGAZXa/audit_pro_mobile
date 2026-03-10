@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import '../app/app_scaffold.dart';
+import '../apm_test/apm_test_form_screen.dart';
 import '../apm/database/database_helper.dart';
 import '../auth/auth_session.dart';
 import '../hna/heat_network_assessment/heat_network_assessment_screen.dart';
@@ -29,6 +31,24 @@ class FormsHomeScreen extends StatelessWidget {
                 await _openHnaFromHome(context);
               },
             ),
+            if (!kReleaseMode) ...[
+              const SizedBox(height: 12),
+              _buildFormCard(
+                context,
+                title: 'APM Test Feature',
+                description: 'Development-only end-to-end submission test.',
+                icon: Icons.fact_check,
+                color: Colors.blueGrey,
+                onTap: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      settings: const RouteSettings(name: '/apm-test'),
+                      builder: (_) => ApmTestFormScreen(session: session),
+                    ),
+                  );
+                },
+              ),
+            ],
           ],
         ),
       ),
