@@ -7,6 +7,7 @@ import '../apm/services/app_info_service.dart';
 import '../apm/services/apm_portal_update_service.dart';
 import '../apm/services/update_coordinator.dart';
 import '../apm/services/update_state_store.dart';
+import '../apm_test/apm_test_web_editor_screen.dart';
 import '../apm/forms/heat_network_assessment/hna_web_editor_screen.dart';
 import 'update_required_screen.dart';
 
@@ -38,6 +39,21 @@ class _SplashScreenState extends State<SplashScreen> {
     //   https://<host>/flutter/#/hna/edit?ticket=<guid>
     // We keep the ticket in the fragment and pass it via a header on API calls.
     if (kIsWeb) {
+      final apmTestLaunch = _tryReadApmTestWebEditorLaunch();
+      if (apmTestLaunch != null) {
+        _hasNavigated = true;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            settings: const RouteSettings(name: '/apm-test-web-editor'),
+            builder: (_) => ApmTestWebEditorScreen(
+              submissionId: apmTestLaunch.submissionId,
+              token: apmTestLaunch.token,
+            ),
+          ),
+        );
+        return;
+      }
+
       final deepLink = _tryReadEditorDeepLink();
       if (deepLink != null) {
         _hasNavigated = true;
@@ -126,6 +142,21 @@ class _SplashScreenState extends State<SplashScreen> {
     }
   }
 
+  _ApmTestWebEditorLaunch? _tryReadApmTestWebEditorLaunch() {
+    try {
+      final submissionId = (Uri.base.queryParameters['submissionId'] ?? '')
+          .trim();
+      final token = (Uri.base.queryParameters['token'] ?? '').trim();
+      if (!_looksLikeGuid(submissionId) || token.isEmpty) {
+        return null;
+      }
+
+      return _ApmTestWebEditorLaunch(submissionId: submissionId, token: token);
+    } catch (_) {
+      return null;
+    }
+  }
+
   _EditorDeepLink? _tryReadDeepLinkFromUri(Uri uri) {
     // We treat both as equivalent deep-links.
     final path = uri.path;
@@ -202,4 +233,14 @@ class _EditorDeepLink {
   final String ticket;
   final String? returnUrl;
   final String? mode;
+}
+
+class _ApmTestWebEditorLaunch {
+  const _ApmTestWebEditorLaunch({
+    required this.submissionId,
+    required this.token,
+  });
+
+  final String submissionId;
+  final String token;
 }

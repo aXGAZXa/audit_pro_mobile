@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:local_auth/local_auth.dart';
 
@@ -124,6 +125,27 @@ class AppDrawer extends StatelessWidget {
               Navigator.pushNamed(context, '/submissions');
             },
           ),
+          if (!kReleaseMode) ...[
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.fact_check),
+              title: const Text('APM Test Form'),
+              subtitle: const Text('Development only'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/apm-test');
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.list_alt),
+              title: const Text('APM Test Submissions'),
+              subtitle: const Text('Development only'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/apm-test/submissions');
+              },
+            ),
+          ],
           if (hasPlatformJwt && platformBioEnabled) ...[
             const Divider(),
             ListTile(

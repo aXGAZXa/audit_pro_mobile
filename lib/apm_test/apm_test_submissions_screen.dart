@@ -1,8 +1,7 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 
 import '../auth/auth_session.dart';
+import 'apm_test_web_editor_screen.dart';
 import 'apm_test_forms_api.dart';
 import 'apm_test_models.dart';
 
@@ -99,44 +98,34 @@ class _ApmTestSubmissionsScreenState extends State<ApmTestSubmissionsScreen> {
                 return ListTile(
                   title: Text(item.formKey),
                   subtitle: Text(
-                    'Rev ${item.revision} • ${item.submittedByEmail}\n${item.submittedAtUtc.toLocal()}',
+                    'Rev ${item.revision} • ${item.submittedByEmail}\n${item.submittedAtUtc.toLocal()}\n${item.id}',
                   ),
                   trailing: const Icon(Icons.chevron_right),
-                  onTap: () {
-                    Navigator.of(context).push(
+                  isThreeLine: true,
+                  onTap: () async {
+                    final auth = widget.session.state.value;
+                    if (auth == null) {
+                      return;
+                    }
+
+                    await Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => _SubmissionJsonScreen(submission: item),
+                        settings: const RouteSettings(
+                          name: '/apm-test-web-editor',
+                        ),
+                        builder: (_) => ApmTestWebEditorScreen(
+                          submissionId: item.id,
+                          token: auth.token,
+                        ),
                       ),
                     );
+
+                    if (!mounted) return;
+                    await _load();
                   },
                 );
               },
             ),
-    );
-  }
-}
-
-class _SubmissionJsonScreen extends StatelessWidget {
-  const _SubmissionJsonScreen({required this.submission});
-
-  final ApmTestFormSubmission submission;
-
-  @override
-  Widget build(BuildContext context) {
-    String pretty;
-    try {
-      final decoded = jsonDecode(submission.payloadJson);
-      pretty = const JsonEncoder.withIndent('  ').convert(decoded);
-    } catch (_) {
-      pretty = submission.payloadJson;
-    }
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Submission Payload')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: SingleChildScrollView(child: SelectableText(pretty)),
-      ),
     );
   }
 }
