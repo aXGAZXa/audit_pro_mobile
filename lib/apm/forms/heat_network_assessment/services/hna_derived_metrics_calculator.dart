@@ -92,20 +92,20 @@ class HnaDerivedMetricsCalculator {
       communalControls: communalControls,
     );
 
-      final meteringProvided = _computeMeteringProvided(
-        isHeatNetwork: isHeatNetwork,
-        suppliesDwellings: suppliesDwellings,
-        numBlocks: numBlocks,
-        totalMeterCount: totalMeterCount,
-        bulkMeterCount: bulkMeterCount,
-        blockMeterCount: blockMeterCount,
-        allGeneratorsHaveIndividualMeters: allGeneratorsHaveIndividualMeters,
-        allInspectedDwellingsMetered: allInspectedDwellingsMetered,
-        anyInspectedDwellingMetered: anyInspectedDwellingMetered,
-        anyGeneratorHasIndividualMeter: anyGeneratorHasIndividualMeter,
-        hasBulkMeter: _toNullableBool(formData['hasBulkMeter']),
-        hasBlockMeters: _toNullableBool(formData['hasBlockMeters']),
-      );
+    final meteringProvided = _computeMeteringProvided(
+      isHeatNetwork: isHeatNetwork,
+      suppliesDwellings: suppliesDwellings,
+      numBlocks: numBlocks,
+      totalMeterCount: totalMeterCount,
+      bulkMeterCount: bulkMeterCount,
+      blockMeterCount: blockMeterCount,
+      allGeneratorsHaveIndividualMeters: allGeneratorsHaveIndividualMeters,
+      allInspectedDwellingsMetered: allInspectedDwellingsMetered,
+      anyInspectedDwellingMetered: anyInspectedDwellingMetered,
+      anyGeneratorHasIndividualMeter: anyGeneratorHasIndividualMeter,
+      hasBulkMeter: _toNullableBool(formData['hasBulkMeter']),
+      hasBlockMeters: _toNullableBool(formData['hasBlockMeters']),
+    );
 
     final dwellingFeasibility = _computeDwellingFeasibilitySummary(
       isHeatNetwork: isHeatNetwork,

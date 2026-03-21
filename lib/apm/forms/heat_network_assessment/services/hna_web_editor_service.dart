@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
-import 'package:http_parser/http_parser.dart';
 
 import '../../../services/portal_api_client.dart';
 
@@ -127,45 +126,68 @@ class HnaWebEditorService {
     required String fileName,
     required String contentType,
   }) async {
-    final uri = _uri('/api/editor/hna/attachments/$attachmentId/upload');
-
-    final request = http.MultipartRequest('POST', uri);
-    request.headers[ticketHeader] = ticket;
-    request.files.add(
-      http.MultipartFile.fromBytes(
-        'file',
-        bytes,
-        filename: fileName,
-        contentType: MediaType.parse(contentType),
-      ),
+    final targetJson = await apiClient.postJson(
+      '/api/editor/hna/attachments/$attachmentId/upload-target',
+      headers: {ticketHeader: ticket},
+      body: {
+        'fileName': fileName,
+        'contentType': contentType,
+        'fileSize': bytes.length,
+      },
     );
 
-    final streamed = await apiClient.httpClient.send(request);
-    final response = await http.Response.fromStream(streamed);
-
-    Map<String, dynamic> json;
-    try {
-      final decoded = jsonDecode(response.body);
-      json = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
-    } catch (_) {
-      json = <String, dynamic>{};
-    }
-
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      final message =
-          PortalApiClient.readResultMessage(json) ??
-          response.reasonPhrase ??
-          'Upload failed';
-      throw PortalApiException(message, statusCode: response.statusCode);
-    }
-
-    if (!PortalApiClient.readResultSuccess(json)) {
+    if (!PortalApiClient.readResultSuccess(targetJson)) {
       throw PortalApiException(
-        PortalApiClient.readResultMessage(json) ?? 'Upload failed',
-        statusCode: response.statusCode,
+        PortalApiClient.readResultMessage(targetJson) ??
+            'Failed to get upload target',
       );
     }
 
-    return json;
+    final targetData = PortalApiClient.readResultData<Map<String, dynamic>>(
+      targetJson,
+    );
+    if (targetData == null) {
+      throw PortalApiException('Malformed upload target response');
+    }
+
+    final uploadUrl = (targetData['uploadUrl'] ?? '').toString().trim();
+    final uploadContentType = (targetData['contentType'] ?? contentType)
+        .toString()
+        .trim();
+    if (uploadUrl.isEmpty) {
+      throw PortalApiException('Missing upload URL');
+    }
+
+    final putRequest = http.Request('PUT', Uri.parse(uploadUrl));
+    putRequest.headers['Content-Type'] = uploadContentType;
+    putRequest.bodyBytes = bytes;
+
+    final putResponse = await apiClient.httpClient.send(putRequest);
+    final putBody = await putResponse.stream.bytesToString();
+    if (putResponse.statusCode < 200 || putResponse.statusCode >= 300) {
+      throw PortalApiException(
+        putBody.isEmpty ? 'Direct upload failed' : putBody,
+        statusCode: putResponse.statusCode,
+      );
+    }
+
+    final finalizeJson = await apiClient.postJson(
+      '/api/editor/hna/attachments/$attachmentId/finalize',
+      headers: {ticketHeader: ticket},
+      body: {
+        'fileName': fileName,
+        'contentType': uploadContentType,
+        'fileSize': bytes.length,
+      },
+    );
+
+    if (!PortalApiClient.readResultSuccess(finalizeJson)) {
+      throw PortalApiException(
+        PortalApiClient.readResultMessage(finalizeJson) ??
+            'Upload finalize failed',
+      );
+    }
+
+    return finalizeJson;
   }
 }
