@@ -4,6 +4,8 @@ import 'package:gtapp_mobile/gtapp_mobile.dart' hide FormState;
 import '../auth/auth_session.dart';
 import '../auth/login_screen.dart';
 import '../logging/apm_logger.dart';
+import '../apm_test/apm_test_form_screen.dart';
+import '../apm_test/apm_test_submissions_screen.dart';
 import '../apm/components/observations_list_screen.dart';
 import '../apm/forms/heat_network_assessment/heat_network_assessment_screen.dart';
 import '../apm/forms/heat_network_assessment/services/hna_edit_requests_service.dart';
@@ -76,7 +78,12 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
 
   bool _isInFormRoute(String? routeName) {
     final r = (routeName ?? '').trim();
-    return r == '/hna' || r.startsWith('/hna/') || r == '/hna-web-editor';
+    return r == '/hna' ||
+        r.startsWith('/hna/') ||
+        r == '/hna-web-editor' ||
+        r == '/apm-test' ||
+        r.startsWith('/apm-test/') ||
+        r == '/apm-test-web-editor';
   }
 
   Future<void> _tryRunDailyMaintenance({required String reason}) async {
@@ -286,6 +293,9 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
           '/my-forms': (context) => MyFormsScreen(session: _session),
           '/platform': (context) =>
               PlaceholderScreen(session: _session, title: 'Platform Access'),
+          '/apm-test': (context) => ApmTestFormScreen(session: _session),
+          '/apm-test/submissions': (context) =>
+              ApmTestSubmissionsScreen(session: _session),
           '/settings': (context) => SettingsScreen(session: _session),
           '/submissions': (context) => SubmissionsScreen(session: _session),
         },

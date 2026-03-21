@@ -1,5 +1,5 @@
 class HnaDerivedMetricsCalculator {
-  static const int schemaVersion = 3;
+  static const int schemaVersion = 4;
 
   /// Computes derived metrics using only the submission payload JSON.
   ///
@@ -23,6 +23,10 @@ class HnaDerivedMetricsCalculator {
 
     final observations = _asListOfMapsFromDynamicList(observationsJson);
     final unsafeObservations = _asListOfMaps(unsafeJson?['unsafeObservations']);
+    final unsafeReports = _asListOfMaps(unsafeJson?['unsafeReports']);
+    final unreportedUnsafeObservations = _asListOfMaps(
+      unsafeJson?['unreportedUnsafeObservations'],
+    );
 
     final networkType = _normalizeNetworkType(
       formData['meetsHeatNetworkDefinition'],
@@ -81,9 +85,12 @@ class HnaDerivedMetricsCalculator {
       dhwPlants: dhwPlants,
       communalControls: communalControls,
     );
-
-    final assistedLivingIndicators = _countAssistedLivingIndicators(formData);
-    final buildingUseCases = _buildBuildingUseCases(formData);
+    final nonOperationalPlantAssetCount = _countNonOperationalPlantItemsJson(
+      generators: generators,
+      phex: phex,
+      dhwPlants: dhwPlants,
+      communalControls: communalControls,
+    );
 
     final meteringProvided = _computeMeteringProvided(
       isHeatNetwork: isHeatNetwork,
@@ -100,13 +107,19 @@ class HnaDerivedMetricsCalculator {
       hasBlockMeters: _toNullableBool(formData['hasBlockMeters']),
     );
 
-    final dwellingMeteringFeasibility =
-        _computeDwellingMeteringFeasibilityFromInspectionsJson(
-          isHeatNetwork: isHeatNetwork,
-          suppliesDwellings: suppliesDwellings,
-          meteringProvided: meteringProvided,
-          dwellingInspections: dwellingInspections,
-        );
+    final dwellingFeasibility = _computeDwellingFeasibilitySummary(
+      isHeatNetwork: isHeatNetwork,
+      suppliesDwellings: suppliesDwellings,
+      meteringProvided: meteringProvided,
+      dwellingInspections: dwellingInspections,
+    );
+
+    final hasDwellingMeterEvidence = !suppliesDwellings
+        ? false
+        : anyInspectedDwellingMetered;
+
+    final assistedLivingIndicators = _countAssistedLivingIndicators(formData);
+    final buildingUseCases = _buildBuildingUseCases(formData);
 
     return _computeCore(
       formData: formData,
@@ -122,11 +135,18 @@ class HnaDerivedMetricsCalculator {
       anyGeneratorHasIndividualMeter: anyGeneratorHasIndividualMeter,
       numberOfDwellingsInspected: dwellingInspections.length,
       plantInPoorCondition: plantInPoorCondition,
+      nonOperationalPlantAssetCount: nonOperationalPlantAssetCount,
       assistedLivingIndicators: assistedLivingIndicators,
       buildingUseCases: buildingUseCases,
-      dwellingMeteringFeasibility: dwellingMeteringFeasibility,
+      dwellingMeteringFeasibility: dwellingFeasibility.overall,
+      dwellingHeatingMeterFeasibility: dwellingFeasibility.heating,
+      dwellingDhwMeterFeasibility: dwellingFeasibility.dhw,
+      hasDwellingMeterEvidence: hasDwellingMeterEvidence,
       observationCount: observations.length,
-      unsafeCount: unsafeObservations.length,
+      unsafeCount:
+          unsafeObservations.length +
+          unsafeReports.length +
+          unreportedUnsafeObservations.length,
       methodologyVersion: methodologyVersion,
     );
   }
@@ -145,9 +165,13 @@ class HnaDerivedMetricsCalculator {
     required bool anyGeneratorHasIndividualMeter,
     required int numberOfDwellingsInspected,
     required int plantInPoorCondition,
+    required int nonOperationalPlantAssetCount,
     required int assistedLivingIndicators,
     required String buildingUseCases,
     required String dwellingMeteringFeasibility,
+    required String dwellingHeatingMeterFeasibility,
+    required String dwellingDhwMeterFeasibility,
+    required bool hasDwellingMeterEvidence,
     required int observationCount,
     required int unsafeCount,
     required String methodologyVersion,
@@ -196,8 +220,12 @@ class HnaDerivedMetricsCalculator {
       'networkCategory': networkCategory,
       'numberOfDwellingsInspected': numberOfDwellingsInspected,
       'plantInPoorCondition': plantInPoorCondition,
+      'nonOperationalPlantAssetCount': nonOperationalPlantAssetCount,
       'assistedLivingIndicators': assistedLivingIndicators,
       'buildingUseCases': buildingUseCases,
+      'dwellingHeatingMeterFeasibility': dwellingHeatingMeterFeasibility,
+      'dwellingDhwMeterFeasibility': dwellingDhwMeterFeasibility,
+      'hasDwellingMeterEvidence': hasDwellingMeterEvidence,
     };
   }
 
@@ -342,6 +370,56 @@ class HnaDerivedMetricsCalculator {
     return 'Further investigation required';
   }
 
+  static _DwellingFeasibilitySummary _computeDwellingFeasibilitySummary({
+    required bool isHeatNetwork,
+    required bool suppliesDwellings,
+    required String meteringProvided,
+    required List<Map<String, dynamic>> dwellingInspections,
+  }) {
+    final overall = _computeDwellingMeteringFeasibilityFromInspectionsJson(
+      isHeatNetwork: isHeatNetwork,
+      suppliesDwellings: suppliesDwellings,
+      meteringProvided: meteringProvided,
+      dwellingInspections: dwellingInspections,
+    );
+
+    if (!isHeatNetwork || !suppliesDwellings || dwellingInspections.isEmpty) {
+      return _DwellingFeasibilitySummary(
+        overall: overall,
+        heating: overall,
+        dhw: overall,
+      );
+    }
+
+    String aggregateField(String key) {
+      var anyFurther = false;
+      var anyYes = false;
+      var anyNo = false;
+
+      for (final inspection in dwellingInspections) {
+        final v = (inspection[key] ?? '').toString().trim().toLowerCase();
+        if (v.isEmpty) continue;
+        if (v == 'yes') anyYes = true;
+        if (v == 'no') anyNo = true;
+        if (v.contains('further') || v.contains('investigation')) {
+          anyFurther = true;
+        }
+      }
+
+      if (anyFurther) return 'Further investigation required';
+      if (anyYes && anyNo) return 'Variable feasibility';
+      if (anyYes) return 'Potentially feasible';
+      if (anyNo) return 'Likely not feasible';
+      return 'Further investigation required';
+    }
+
+    return _DwellingFeasibilitySummary(
+      overall: overall,
+      heating: aggregateField('heatingSubMeterFeasible'),
+      dhw: aggregateField('dhwSubMeterFeasible'),
+    );
+  }
+
   static int _countPlantItemsInPoorConditionJson({
     required List<Map<String, dynamic>> generators,
     required List<Map<String, dynamic>> phex,
@@ -365,6 +443,33 @@ class HnaDerivedMetricsCalculator {
     }
     for (final c in communalControls) {
       if (isPoor((c['condition'] ?? '').toString())) count++;
+    }
+    return count;
+  }
+
+  static int _countNonOperationalPlantItemsJson({
+    required List<Map<String, dynamic>> generators,
+    required List<Map<String, dynamic>> phex,
+    required List<Map<String, dynamic>> dhwPlants,
+    required List<Map<String, dynamic>> communalControls,
+  }) {
+    bool isNonOperational(String? operational) {
+      final v = (operational ?? '').trim().toLowerCase();
+      return v == 'no' || v == 'false' || v.contains('non-operational');
+    }
+
+    var count = 0;
+    for (final g in generators) {
+      if (isNonOperational((g['operational'] ?? '').toString())) count++;
+    }
+    for (final p in phex) {
+      if (isNonOperational((p['operational'] ?? '').toString())) count++;
+    }
+    for (final d in dhwPlants) {
+      if (isNonOperational((d['operational'] ?? '').toString())) count++;
+    }
+    for (final c in communalControls) {
+      if (isNonOperational((c['operational'] ?? '').toString())) count++;
     }
     return count;
   }
@@ -434,4 +539,16 @@ class HnaDerivedMetricsCalculator {
     }
     return out;
   }
+}
+
+class _DwellingFeasibilitySummary {
+  const _DwellingFeasibilitySummary({
+    required this.overall,
+    required this.heating,
+    required this.dhw,
+  });
+
+  final String overall;
+  final String heating;
+  final String dhw;
 }
