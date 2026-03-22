@@ -8,6 +8,8 @@ import 'package:audit_pro_mobile/apm/services/app_info_service.dart';
 import 'package:audit_pro_mobile/apm/services/auth_token_store.dart';
 import 'package:audit_pro_mobile/apm/services/portal_api_client.dart';
 import 'package:audit_pro_mobile/apm/config/api_config.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/editor/form_draft_persistence_service.dart';
+import 'heat_network_assessment_definition.dart';
 import 'screens/hna_site_details_screen.dart';
 import 'screens/development_details_screen.dart';
 import 'screens/metering_details_screen.dart';
@@ -36,6 +38,8 @@ class _HeatNetworkAssessmentScreenState
     extends State<HeatNetworkAssessmentScreen> {
   final PageController _pageController = PageController();
   final DatabaseHelper _db = DatabaseHelper.instance;
+  final FormDraftPersistenceService _draftPersistence =
+      FormDraftPersistenceService();
   final HnaSubmissionService _submissionService = HnaSubmissionService(
     tokenStore: AuthTokenStore(),
     appInfoService: AppInfoService(),
@@ -55,6 +59,9 @@ class _HeatNetworkAssessmentScreenState
   bool _observationsDirty = false;
   int _saveGeneration = 0;
   bool _isLoading = true;
+  static const FormSavePolicy _autosavePolicy = FormSavePolicy(
+    debounce: Duration(milliseconds: 700),
+  );
 
   static const String _formDataKey = 'formData';
   static const String _assetsKey = 'assets';
@@ -114,87 +121,28 @@ class _HeatNetworkAssessmentScreenState
 
     try {
       if (widget.formId != null) {
-        final form = await _db.getForm(widget.formId!);
-        if (form != null) {
-          _formId = form['id'];
-          ApmLogger.info(
-            'Loaded form by id formId=$_formId status=${form['status']}',
-            category: 'HNA/Startup',
-          );
-
-          final status = form['status']?.toString() ?? '';
-          if (status == 'draft' && _formId != null) {
-            await _db.setCurrentFormId(
-              formType: 'heat_network_assessment',
-              formId: _formId!,
-            );
-          }
-
-          final raw = form['form_data'] as Map<String, dynamic>;
-          final converted = Map<String, dynamic>.from(
-            _convertFromSerializable(raw) as Map,
-          );
-
-          _hydrateFromDraftDoc(converted);
-          if (mounted) setState(() => _isLoading = false);
-          await _syncClientsBestEffort();
-          return;
-        }
-
         ApmLogger.info(
-          'No form found for explicit id formId=${widget.formId}',
+          'Explicit form requested formId=${widget.formId}',
           category: 'HNA/Startup',
         );
       }
 
-      if (!widget.forceNew) {
-        final currentId = await _db.getCurrentFormId('heat_network_assessment');
-
-        if (currentId != null) {
-          final currentForm = await _db.getForm(currentId);
-          if (currentForm != null) {
-            final status = currentForm['status']?.toString() ?? '';
-            if (status == 'draft') {
-              _formId = currentForm['id'];
-              ApmLogger.info(
-                'Resuming current draft form formId=$_formId',
-                category: 'HNA/Startup',
-              );
-              final loadedData =
-                  currentForm['form_data'] as Map<String, dynamic>;
-              final converted = Map<String, dynamic>.from(
-                _convertFromSerializable(loadedData) as Map,
-              );
-              _hydrateFromDraftDoc(converted);
-              if (mounted) setState(() => _isLoading = false);
-              await _syncClientsBestEffort();
-              return;
-            }
-
-            ApmLogger.info(
-              'Current form is not draft (status=$status). Starting new.',
-              category: 'HNA/Startup',
-            );
-          }
-
-          // Current pointer is stale or no longer a draft.
-          await _db.clearCurrentFormId('heat_network_assessment');
-        }
-      }
-
-      // Create new form in database (either forceNew=true or no existing forms)
-      final id = await _db.saveForm(
-        formType: 'heat_network_assessment',
-        status: 'draft',
-        formData: {},
+      final session = await _draftPersistence.loadOrCreate(
+        formType: kHeatNetworkAssessmentFormType,
+        explicitFormId: widget.formId,
+        forceNew: widget.forceNew,
+        allowLatestDraftFallback: false,
+        initialFormData: const <String, dynamic>{},
       );
-      _formId = id;
-      await _db.setCurrentFormId(
-        formType: 'heat_network_assessment',
-        formId: id,
+      _formId = session.formId;
+
+      final converted = Map<String, dynamic>.from(
+        _convertFromSerializable(session.formData) as Map,
       );
+      _hydrateFromDraftDoc(converted);
+
       ApmLogger.info(
-        'Created new form formId=$_formId',
+        'Loaded draft session formId=$_formId status=${session.status}',
         category: 'HNA/Startup',
       );
       if (mounted) setState(() => _isLoading = false);
@@ -252,7 +200,7 @@ class _HeatNetworkAssessmentScreenState
       _formData[key] = value;
       _draftDoc[_formDataKey] = _formData;
     });
-    _saveForm(status: 'draft'); // Autosave
+    _saveForm(status: 'draft', savePolicy: _autosavePolicy); // Autosave
   }
 
   void _updateAssets(Map<String, dynamic> nextAssets) {
@@ -261,7 +209,7 @@ class _HeatNetworkAssessmentScreenState
       _assetsJson = Map<String, dynamic>.from(nextAssets);
       _draftDoc[_assetsKey] = _assetsJson;
     });
-    _saveForm(status: 'draft');
+    _saveForm(status: 'draft', savePolicy: _autosavePolicy);
   }
 
   void _updateUnsafe(Map<String, dynamic> nextUnsafe) {
@@ -270,7 +218,7 @@ class _HeatNetworkAssessmentScreenState
       _unsafeJson = Map<String, dynamic>.from(nextUnsafe);
       _draftDoc[_unsafeKey] = _unsafeJson;
     });
-    _saveForm(status: 'draft');
+    _saveForm(status: 'draft', savePolicy: _autosavePolicy);
   }
 
   void _updateObservations(List<Map<String, dynamic>> nextObservations) {
@@ -283,7 +231,7 @@ class _HeatNetworkAssessmentScreenState
 
       _reconcileUnsafeFromObservations();
     });
-    _saveForm(status: 'draft');
+    _saveForm(status: 'draft', savePolicy: _autosavePolicy);
   }
 
   bool _isUnsafeObservation(Map<String, dynamic> observation) {
@@ -354,7 +302,10 @@ class _HeatNetworkAssessmentScreenState
     return false;
   }
 
-  Future<void> _saveForm({String status = 'draft'}) async {
+  Future<void> _saveForm({
+    String status = 'draft',
+    FormSavePolicy savePolicy = const FormSavePolicy.immediate(),
+  }) async {
     if (_formId == null) return;
     final saveGen = ++_saveGeneration;
     try {
@@ -404,11 +355,13 @@ class _HeatNetworkAssessmentScreenState
       }
 
       final dataToSave = _convertToSerializable(docToSave);
-      await _db.saveForm(
-        id: _formId,
-        formType: 'heat_network_assessment',
+      await _draftPersistence.save(
+        formType: kHeatNetworkAssessmentFormType,
+        formId: _formId!,
         status: status,
-        formData: dataToSave,
+        formData: Map<String, dynamic>.from(dataToSave as Map),
+        keepCurrentPointer: status == 'draft',
+        savePolicy: savePolicy,
       );
 
       // Reset dirty flags after a successful save.
@@ -619,8 +572,12 @@ class _HeatNetworkAssessmentScreenState
 
     // Once the user submits (even if it fails), we stop treating this as the
     // in-progress draft. It will remain in My Forms as pending for retry.
-    await _db.clearCurrentFormId('heat_network_assessment');
+    await _draftPersistence.clearCurrentDraft(kHeatNetworkAssessmentFormType);
 
+    await _draftPersistence.flush(
+      formType: kHeatNetworkAssessmentFormType,
+      formId: _formId!,
+    );
     await _saveForm(status: 'pending');
     if (!mounted) return;
 
@@ -654,7 +611,13 @@ class _HeatNetworkAssessmentScreenState
   }
 
   void _previousPage() async {
-    _saveForm();
+    if (_formId != null) {
+      await _draftPersistence.flush(
+        formType: kHeatNetworkAssessmentFormType,
+        formId: _formId!,
+      );
+    }
+    await _saveForm();
     if (_currentPage > 0) {
       _pageController.previousPage(
         duration: const Duration(milliseconds: 300),
@@ -667,7 +630,13 @@ class _HeatNetworkAssessmentScreenState
     final pages = _buildPages();
 
     if (_currentPage < pages.length - 1) {
-      _saveForm();
+      if (_formId != null) {
+        await _draftPersistence.flush(
+          formType: kHeatNetworkAssessmentFormType,
+          formId: _formId!,
+        );
+      }
+      await _saveForm();
 
       _pageController.nextPage(
         duration: const Duration(milliseconds: 300),
@@ -677,6 +646,13 @@ class _HeatNetworkAssessmentScreenState
       // Complete ?
       Navigator.of(context).pop();
     }
+  }
+
+  @override
+  void dispose() {
+    _draftPersistence.dispose();
+    _pageController.dispose();
+    super.dispose();
   }
 
   @override

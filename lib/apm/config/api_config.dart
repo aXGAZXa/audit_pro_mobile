@@ -5,6 +5,6 @@
 class ApiConfig {
   static const String portalBaseUrl = String.fromEnvironment(
     'PORTAL_BASE_URL',
-    defaultValue: 'https://buildingservices-portal.co.uk/',
+    defaultValue: 'https://admin-portal.audit-pro.co.uk/',
   );
 }

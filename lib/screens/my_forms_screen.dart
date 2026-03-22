@@ -5,6 +5,10 @@ import '../auth/auth_session.dart';
 import '../logging/apm_feedback.dart';
 import '../logging/apm_logger.dart';
 import '../apm/database/database_helper.dart';
+import '../apm/forms/condition_report/condition_report_definition.dart';
+import '../apm/forms/condition_report/condition_report_screen.dart';
+import '../apm/forms/condition_report/services/cr_submission_service.dart';
+import '../apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
 import '../apm/forms/heat_network_assessment/services/hna_form_delete_service.dart';
 import '../apm/forms/heat_network_assessment/services/hna_submission_service.dart';
 import '../apm/services/app_info_service.dart';
@@ -27,13 +31,18 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
     tokenStore: AuthTokenStore(),
     appInfoService: AppInfoService(),
   );
+  final _crSubmissionService = CrSubmissionService(
+    tokenStore: AuthTokenStore(),
+    appInfoService: AppInfoService(),
+  );
 
   bool _busy = true;
   String _status = '';
   List<Map<String, dynamic>> _inProgress = const [];
   List<Map<String, dynamic>> _drafts = const [];
   List<Map<String, dynamic>> _pending = const [];
-  int? _currentDraftId;
+  int? _currentHnaDraftId;
+  int? _currentCrDraftId;
 
   @override
   void initState() {
@@ -48,24 +57,44 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
     });
 
     try {
-      final forms = await _db.getFormsByType('heat_network_assessment');
-      final currentId = await _db.getCurrentFormId('heat_network_assessment');
+      final hnaForms = await _db.getFormsByType(kHeatNetworkAssessmentFormType);
+      final crForms = await _db.getFormsByType(kConditionReportFormType);
+      final forms = [...hnaForms, ...crForms];
+
+      final currentHnaId = await _db.getCurrentFormId(
+        kHeatNetworkAssessmentFormType,
+      );
+      final currentCrId = await _db.getCurrentFormId(kConditionReportFormType);
 
       final allDraft = forms.where((f) => f['status'] == 'draft').toList();
       final pending = forms.where((f) => f['status'] == 'pending').toList();
 
-      final inProgress = currentId == null
-          ? <Map<String, dynamic>>[]
-          : allDraft.where((f) => f['id'] == currentId).toList();
-      final otherDrafts = currentId == null
-          ? allDraft
-          : allDraft.where((f) => f['id'] != currentId).toList();
+      final inProgress = allDraft.where((f) {
+        final id = f['id'];
+        final formType = _formType(f);
+        if (formType == kHeatNetworkAssessmentFormType) {
+          return id == currentHnaId;
+        }
+        if (formType == kConditionReportFormType) return id == currentCrId;
+        return false;
+      }).toList();
+
+      final otherDrafts = allDraft.where((f) {
+        final id = f['id'];
+        final formType = _formType(f);
+        if (formType == kHeatNetworkAssessmentFormType) {
+          return id != currentHnaId;
+        }
+        if (formType == kConditionReportFormType) return id != currentCrId;
+        return true;
+      }).toList();
 
       setState(() {
         _inProgress = inProgress;
         _drafts = otherDrafts;
         _pending = pending;
-        _currentDraftId = currentId;
+        _currentHnaDraftId = currentHnaId;
+        _currentCrDraftId = currentCrId;
         _status = (allDraft.isEmpty && pending.isEmpty) ? 'No forms yet.' : '';
       });
     } catch (e, st) {
@@ -122,9 +151,11 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
       setState(() => _busy = true);
       await _deleteService.deleteFormAndAttachments(formId: formId, db: _db);
 
-      final currentId = await _db.getCurrentFormId('heat_network_assessment');
+      final form = await _db.getForm(formId);
+      final formType = _formType(form ?? const {});
+      final currentId = await _db.getCurrentFormId(formType);
       if (currentId == formId) {
-        await _db.clearCurrentFormId('heat_network_assessment');
+        await _db.clearCurrentFormId(formType);
       }
 
       if (!mounted) return;
@@ -164,7 +195,13 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
 
     try {
       setState(() => _busy = true);
-      await _submissionService.submitForm(formId: formId);
+      final form = await _db.getForm(formId);
+      final formType = _formType(form ?? const {});
+      if (formType == kConditionReportFormType) {
+        await _crSubmissionService.submitForm(formId: formId);
+      } else {
+        await _submissionService.submitForm(formId: formId);
+      }
       if (!mounted) return;
       ApmFeedback.success(context, 'Submitted.', category: 'MyForms');
       await _load();
@@ -246,6 +283,7 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
   }
 
   String _buildFriendlyRefFallback({
+    required String formType,
     required String iso,
     required String uuid,
   }) {
@@ -258,7 +296,8 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
     final hh = parsed.hour.toString().padLeft(2, '0');
     final min = parsed.minute.toString().padLeft(2, '0');
 
-    return 'HNA-$yy$mm$dd-$hh$min-${_uuidSuffix(uuid)}';
+    final prefix = formType == kConditionReportFormType ? 'CR' : 'HNA';
+    return '$prefix-$yy$mm$dd-$hh$min-${_uuidSuffix(uuid)}';
   }
 
   String _buildDraftMetadata(Map<String, dynamic> form) {
@@ -286,6 +325,7 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
   String _buildPendingMetadata(Map<String, dynamic> form) {
     final updatedAtRaw = form['updated_at']?.toString().trim() ?? '';
     final uuid = form['uuid']?.toString().trim() ?? '';
+    final formType = _formType(form);
     final fd = _readFormData(form);
     final summary = _readSubmissionSummary(fd);
 
@@ -298,7 +338,11 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
         ? ref
         : (updatedAtRaw.isEmpty || uuid.isEmpty)
         ? ''
-        : _buildFriendlyRefFallback(iso: updatedAtRaw, uuid: uuid);
+        : _buildFriendlyRefFallback(
+            formType: formType,
+            iso: updatedAtRaw,
+            uuid: uuid,
+          );
 
     final attemptedAt =
         (summary['lastAttemptAt'] ?? summary['submittedAt'] ?? '')
@@ -390,13 +434,21 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
 
   Widget _buildDraftCard(Map<String, dynamic> form) {
     final formId = form['id'] as int;
-    final isCurrent = _currentDraftId == formId;
+    final formType = _formType(form);
+    final isCurrent = formType == kConditionReportFormType
+        ? _currentCrDraftId == formId
+        : _currentHnaDraftId == formId;
+
+    final isCr = formType == kConditionReportFormType;
+    final title = isCr ? 'Condition Report' : 'Heat Network Assessment';
+    final icon = isCr ? Icons.assignment : Icons.network_check;
+    final color = isCr ? Colors.blue.shade400 : Colors.deepOrange.shade400;
 
     return _buildAppCard(
       context,
-      icon: Icons.network_check,
-      color: Colors.deepOrange.shade400,
-      title: 'Heat Network Assessment',
+      icon: icon,
+      color: color,
+      title: title,
       status: isCurrent ? 'In Progress' : 'Draft',
       metadata: _buildDraftMetadata(form),
       onTap: _busy
@@ -404,8 +456,12 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
           : () async {
               await Navigator.of(context).push(
                 MaterialPageRoute(
-                  settings: const RouteSettings(name: '/hna'),
-                  builder: (_) => HeatNetworkAssessmentScreen(formId: formId),
+                  settings: RouteSettings(
+                    name: isCr ? '/condition-report' : '/hna',
+                  ),
+                  builder: (_) => isCr
+                      ? ConditionReportScreen(formId: formId)
+                      : HeatNetworkAssessmentScreen(formId: formId),
                 ),
               );
               await _load();
@@ -423,12 +479,17 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
 
   Widget _buildPendingCard(Map<String, dynamic> form) {
     final formId = form['id'] as int;
+    final formType = _formType(form);
+    final isCr = formType == kConditionReportFormType;
+    final title = isCr ? 'Condition Report' : 'Heat Network Assessment';
+    final icon = isCr ? Icons.assignment : Icons.network_check;
+    final color = isCr ? Colors.blue.shade400 : Colors.deepOrange.shade400;
 
     return _buildAppCard(
       context,
-      icon: Icons.network_check,
-      color: Colors.deepOrange.shade400,
-      title: 'Heat Network Assessment',
+      icon: icon,
+      color: color,
+      title: title,
       status: 'Needs resubmit',
       metadata: _buildPendingMetadata(form),
       onTap: null,
@@ -444,6 +505,10 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
         ),
       ],
     );
+  }
+
+  String _formType(Map<String, dynamic> form) {
+    return (form['form_type'] ?? kHeatNetworkAssessmentFormType).toString();
   }
 
   @override

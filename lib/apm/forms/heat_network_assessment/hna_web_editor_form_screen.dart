@@ -53,7 +53,7 @@ class HnaWebEditorFormScreen extends StatefulWidget {
   /// Tenant-scoped client names fetched via the editor ticket.
   final List<String> clients;
 
-  final HnaWebEditorService service;
+  final FormWebEditorService service;
 
   /// Optional URL to return to after completing the edit.
   ///
@@ -259,7 +259,7 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
       );
 
       // Attachments are add-only; committing just clears local pending state.
-      HnaWebEditorAttachmentContext.instance.commitPending();
+      FormWebEditorAttachmentContext.instance.commitPending();
 
       if (!mounted) return false;
       _lastSavedPayloadJson = payloadJson;
@@ -448,7 +448,7 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
         ? 0
         : int.tryParse((form['id'] ?? '0').toString()) ?? 0;
 
-    hna['attachments'] = HnaWebEditorAttachmentContext.instance.buildManifest(
+    hna['attachments'] = FormWebEditorAttachmentContext.instance.buildManifest(
       formId: formId,
       formData: formDataOut,
       assetsJson: Map<String, dynamic>.from(_assetsJson),

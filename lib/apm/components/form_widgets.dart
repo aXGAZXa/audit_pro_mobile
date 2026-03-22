@@ -56,7 +56,7 @@ class AppResolvedImage extends StatelessWidget {
     }
 
     return FutureBuilder<Uint8List?>(
-      future: HnaWebEditorAttachmentContext.instance.loadBytesForLocalPath(
+      future: FormWebEditorAttachmentContext.instance.loadBytesForLocalPath(
         path,
       ),
       builder: (context, snapshot) {

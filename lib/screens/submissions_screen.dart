@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import '../app/app_scaffold.dart';
 import '../auth/auth_session.dart';
 import '../logging/apm_logger.dart';
+import '../apm/forms/condition_report/condition_report_definition.dart';
+import '../apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
 import '../apm/forms/heat_network_assessment/heat_network_assessment_screen.dart';
 import '../apm/forms/heat_network_assessment/services/hna_edit_requests_service.dart';
-import '../apm/forms/heat_network_assessment/services/hna_edit_sessions_service.dart';
 import '../apm/forms/heat_network_assessment/services/hna_edit_session_snapshot_hydrator.dart';
+import '../apm/forms/services/forms_edit_sessions_service.dart';
 import '../apm/database/database_helper.dart';
 
 class SubmissionsScreen extends StatefulWidget {
@@ -20,9 +22,9 @@ class SubmissionsScreen extends StatefulWidget {
 
 class _SubmissionsScreenState extends State<SubmissionsScreen> {
   final _db = DatabaseHelper.instance;
-  final _editRequestsService = HnaEditRequestsService();
-  final _editSessionsService = HnaEditSessionsService();
-  final _hydrator = HnaEditSessionSnapshotHydrator();
+  final _editRequestsService = FormsEditRequestsService();
+  final _editSessionsService = FormsEditSessionsService();
+  final _hydrator = FormEditSessionSnapshotHydrator();
 
   static const Duration _retention = Duration(days: 7);
 
@@ -44,8 +46,15 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
     });
 
     try {
-      final forms = await _db.getFormsByType('heat_network_assessment');
-      final sent = forms.where((f) => f['status'] == 'sent').toList();
+      final hnaForms = await _db.getFormsByType(kHeatNetworkAssessmentFormType);
+      final crForms = await _db.getFormsByType(kConditionReportFormType);
+      final forms = [...hnaForms, ...crForms];
+      final sent = forms.where((f) => f['status'] == 'sent').toList()
+        ..sort((a, b) {
+          final aUpdated = a['updated_at']?.toString() ?? '';
+          final bUpdated = b['updated_at']?.toString() ?? '';
+          return bUpdated.compareTo(aUpdated);
+        });
 
       setState(() {
         _items = sent;
@@ -93,7 +102,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
     try {
       ApmLogger.info(
         'Checking for edit requests',
-        category: 'HNA/EditRequests',
+        category: 'APM/EditRequests',
       );
       final pending = await _editRequestsService.getPending(token: token);
       if (!mounted) return;
@@ -101,21 +110,21 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
       ApmLogger.info(
         'Edit requests check OK (count: {Count})',
         args: [pending.length],
-        category: 'HNA/EditRequests',
+        category: 'APM/EditRequests',
       );
 
       if (pending.isNotEmpty) {
         ApmLogger.debug(
           'Edit requests ids (first up to 5): {Ids}',
           args: [pending.take(5).map((r) => r.editRequestId).join(', ')],
-          category: 'HNA/EditRequests',
+          category: 'APM/EditRequests',
         );
       }
 
       if (pending.isEmpty) {
         ApmLogger.info(
           'No pending edit requests returned',
-          category: 'HNA/EditRequests',
+          category: 'APM/EditRequests',
         );
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('No edit requests found.')),
@@ -130,7 +139,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
       ApmLogger.debug(
         'Using first pending edit request: editRequestId={EditRequestId}, submissionId={SubmissionId}, tenantId={TenantId}, currentTenantId={CurrentTenantId}',
         args: [r.editRequestId, r.submissionId, r.tenantId, currentTenantId],
-        category: 'HNA/EditRequests',
+        category: 'APM/EditRequests',
       );
 
       final sameTenant =
@@ -139,7 +148,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
       ApmLogger.info(
         'Edit request tenant match: {SameTenant}',
         args: [sameTenant],
-        category: 'HNA/EditRequests',
+        category: 'APM/EditRequests',
       );
 
       final requestedAt = r.requestedAtUtc;
@@ -202,7 +211,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
       ApmLogger.warning(
         'Edit requests check failed: {Error}',
         args: [e.toString()],
-        category: 'HNA/EditRequests',
+        category: 'APM/EditRequests',
         error: e,
         stackTrace: st,
       );
@@ -221,7 +230,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
 
   Future<void> _startEditNow({
     required String token,
-    required HnaPendingEditRequest request,
+    required FormPendingEditRequest request,
   }) async {
     setState(() {
       _checkingEditRequests = true;
@@ -239,7 +248,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
       );
 
       final newFormId = await _hydrator.createDraftFromSnapshot(
-        assessment: snapshot.assessment,
+        assessment: snapshot.formPayload,
         token: token,
         sessionToken: start.sessionToken,
         editRequestId: request.editRequestId,
@@ -264,7 +273,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
       ApmLogger.warning(
         'Start edit flow failed: {Error}',
         args: [e.toString()],
-        category: 'HNA/EditFlow',
+        category: 'APM/EditFlow',
         error: e,
         stackTrace: st,
       );
@@ -329,6 +338,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
   }
 
   String _buildFriendlyRefFallback({
+    required String formType,
     required String iso,
     required String uuid,
   }) {
@@ -341,7 +351,26 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
     final hh = parsed.hour.toString().padLeft(2, '0');
     final min = parsed.minute.toString().padLeft(2, '0');
 
-    return 'HNA-$yy$mm$dd-$hh$min-${_uuidSuffix(uuid)}';
+    final prefix = formType == kConditionReportFormType ? 'CR' : 'HNA';
+    return '$prefix-$yy$mm$dd-$hh$min-${_uuidSuffix(uuid)}';
+  }
+
+  ({String title, IconData icon, MaterialColor color}) _formTypePresentation(
+    String formType,
+  ) {
+    if (formType == kConditionReportFormType) {
+      return (
+        title: 'Condition Report',
+        icon: Icons.fact_check,
+        color: Colors.teal,
+      );
+    }
+
+    return (
+      title: 'Heat Network Assessment',
+      icon: Icons.network_check,
+      color: Colors.deepOrange,
+    );
   }
 
   String _formatDueDateLabel(DateTime dueAt) {
@@ -425,6 +454,10 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
                     itemCount: _items.length,
                     itemBuilder: (context, index) {
                       final item = _items[index];
+                      final formType =
+                          item['form_type']?.toString().trim() ??
+                          kHeatNetworkAssessmentFormType;
+                      final typeUi = _formTypePresentation(formType);
                       final updatedAt =
                           item['updated_at']?.toString().trim() ?? '';
                       final uuid = item['uuid']?.toString().trim() ?? '';
@@ -459,6 +492,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
                           : (effectiveSubmittedIso.isEmpty || uuid.isEmpty)
                           ? ''
                           : _buildFriendlyRefFallback(
+                              formType: formType,
                               iso: effectiveSubmittedIso,
                               uuid: uuid,
                             );
@@ -473,14 +507,15 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
                                 Container(
                                   padding: const EdgeInsets.all(16),
                                   decoration: BoxDecoration(
-                                    color: Colors.deepOrange.shade400
-                                        .withValues(alpha: 0.1),
+                                    color: typeUi.color.shade400.withValues(
+                                      alpha: 0.1,
+                                    ),
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                   child: Icon(
-                                    Icons.network_check,
+                                    typeUi.icon,
                                     size: 32,
-                                    color: Colors.deepOrange.shade400,
+                                    color: typeUi.color.shade400,
                                   ),
                                 ),
                                 const SizedBox(width: 16),
@@ -493,7 +528,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
                                         children: [
                                           Expanded(
                                             child: Text(
-                                              'Heat Network Assessment',
+                                              typeUi.title,
                                               style: Theme.of(
                                                 context,
                                               ).textTheme.titleLarge,

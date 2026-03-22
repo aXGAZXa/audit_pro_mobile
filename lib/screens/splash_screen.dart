@@ -7,7 +7,6 @@ import '../apm/services/app_info_service.dart';
 import '../apm/services/apm_portal_update_service.dart';
 import '../apm/services/update_coordinator.dart';
 import '../apm/services/update_state_store.dart';
-import '../apm_test/apm_test_web_editor_screen.dart';
 import '../apm/forms/heat_network_assessment/hna_web_editor_screen.dart';
 import 'update_required_screen.dart';
 
@@ -36,31 +35,16 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> _bootstrap() async {
     // Web editor launch path: BSP redirects to
-    //   https://<host>/flutter/#/hna/edit?ticket=<guid>
+    //   https://<host>/flutter/#/edit?ticket=<guid>
     // We keep the ticket in the fragment and pass it via a header on API calls.
     if (kIsWeb) {
-      final apmTestLaunch = _tryReadApmTestWebEditorLaunch();
-      if (apmTestLaunch != null) {
-        _hasNavigated = true;
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            settings: const RouteSettings(name: '/apm-test-web-editor'),
-            builder: (_) => ApmTestWebEditorScreen(
-              submissionId: apmTestLaunch.submissionId,
-              token: apmTestLaunch.token,
-            ),
-          ),
-        );
-        return;
-      }
-
       final deepLink = _tryReadEditorDeepLink();
       if (deepLink != null) {
         _hasNavigated = true;
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             settings: const RouteSettings(name: '/hna-web-editor'),
-            builder: (_) => HnaWebEditorScreen(
+            builder: (_) => ApmWebEditorScreen(
               ticket: deepLink.ticket,
               returnUrl: deepLink.returnUrl,
               mode: deepLink.mode,
@@ -123,7 +107,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
   _EditorDeepLink? _tryReadEditorDeepLink() {
     try {
-      // 1) Hash URL strategy: /flutter/#/hna/edit?ticket=...
+      // 1) Hash URL strategy: /flutter/#/edit?ticket=...
       final fragment = Uri.base.fragment.trim();
       if (fragment.isNotEmpty) {
         final normalized = fragment.startsWith('/') ? fragment : '/$fragment';
@@ -132,7 +116,7 @@ class _SplashScreenState extends State<SplashScreen> {
         if (dl != null) return dl;
       }
 
-      // 2) Path URL strategy (just in case we switch later): /flutter/hna/edit?ticket=...
+      // 2) Path URL strategy (just in case we switch later): /flutter/edit?ticket=...
       final dlFromPath = _tryReadDeepLinkFromUri(Uri.base);
       if (dlFromPath != null) return dlFromPath;
 
@@ -142,27 +126,11 @@ class _SplashScreenState extends State<SplashScreen> {
     }
   }
 
-  _ApmTestWebEditorLaunch? _tryReadApmTestWebEditorLaunch() {
-    try {
-      final submissionId = (Uri.base.queryParameters['submissionId'] ?? '')
-          .trim();
-      final token = (Uri.base.queryParameters['token'] ?? '').trim();
-      if (!_looksLikeGuid(submissionId) || token.isEmpty) {
-        return null;
-      }
-
-      return _ApmTestWebEditorLaunch(submissionId: submissionId, token: token);
-    } catch (_) {
-      return null;
-    }
-  }
-
   _EditorDeepLink? _tryReadDeepLinkFromUri(Uri uri) {
-    // We treat both as equivalent deep-links.
     final path = uri.path;
-    final isHnaEdit = path == '/hna/edit' || path.startsWith('/hna/edit/');
+    final isGenericEdit = path == '/edit' || path.startsWith('/edit/');
     final isWebEditor = path == '/hna-web-editor';
-    if (!isHnaEdit && !isWebEditor) return null;
+    if (!isGenericEdit && !isWebEditor) return null;
 
     final ticket = (uri.queryParameters['ticket'] ?? '').trim();
     if (!_looksLikeGuid(ticket)) return null;
@@ -233,14 +201,4 @@ class _EditorDeepLink {
   final String ticket;
   final String? returnUrl;
   final String? mode;
-}
-
-class _ApmTestWebEditorLaunch {
-  const _ApmTestWebEditorLaunch({
-    required this.submissionId,
-    required this.token,
-  });
-
-  final String submissionId;
-  final String token;
 }

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
 import 'package:uuid/uuid.dart';
 
 class ObservationsListScreen extends StatefulWidget {
@@ -87,7 +88,7 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
         _formUuid = (form['uuid'] ?? '').toString();
 
         // JSON-only mode for HNA drafts: observations live in the single forms-row doc.
-        _useDraftJson = _formType == 'heat_network_assessment';
+        _useDraftJson = _formType == kHeatNetworkAssessmentFormType;
       }
     } catch (_) {
       // If this fails, fall back to DB mode.
@@ -318,7 +319,7 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
 
         final status = (form['status'] ?? _formStatus ?? 'draft').toString();
         final formType =
-            (form['form_type'] ?? _formType ?? 'heat_network_assessment')
+            (form['form_type'] ?? _formType ?? kHeatNetworkAssessmentFormType)
                 .toString();
         final uuid = (form['uuid'] ?? _formUuid ?? '').toString();
 
@@ -422,7 +423,7 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
 
           final status = (form['status'] ?? _formStatus ?? 'draft').toString();
           final formType =
-              (form['form_type'] ?? _formType ?? 'heat_network_assessment')
+              (form['form_type'] ?? _formType ?? kHeatNetworkAssessmentFormType)
                   .toString();
           final uuid = (form['uuid'] ?? _formUuid ?? '').toString();
 

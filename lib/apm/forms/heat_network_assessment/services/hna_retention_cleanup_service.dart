@@ -1,5 +1,6 @@
 import 'package:audit_pro_mobile/logging/apm_logger.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
 import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/services/hna_form_delete_service.dart';
 
 class HnaRetentionCleanupService {
@@ -17,7 +18,7 @@ class HnaRetentionCleanupService {
   }) async {
     try {
       final index = await _db.getFormsIndex(
-        formType: 'heat_network_assessment',
+        formType: kHeatNetworkAssessmentFormType,
         statuses: const ['sent'],
       );
 

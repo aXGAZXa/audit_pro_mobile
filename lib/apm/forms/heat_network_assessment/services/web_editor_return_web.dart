@@ -36,7 +36,7 @@ void notifyParentComplete({required String ticket, String? returnUrl}) {
   if (!_isInIFrame()) return;
   try {
     final message = {
-      'type': 'hna-editor-complete',
+      'type': 'editor-complete',
       'ticket': ticket,
       'returnUrl': returnUrl,
     };
@@ -50,7 +50,7 @@ void notifyParentError({required String ticket, required String message}) {
   if (!_isInIFrame()) return;
   try {
     final payload = {
-      'type': 'hna-editor-error',
+      'type': 'editor-error',
       'ticket': ticket,
       'message': message,
     };

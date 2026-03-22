@@ -4,6 +4,7 @@ import 'dart:convert';
 import '../../../database/database_helper.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/entity_card.dart';
+import '../heat_network_assessment_definition.dart';
 import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/screens/add_heat_meter_screen.dart';
 
 class MeterListScreen extends StatefulWidget {
@@ -159,7 +160,7 @@ class _MeterListScreenState extends State<MeterListScreen> {
     draftDoc['assets'] = nextAssets;
 
     final status = (form['status'] ?? 'draft').toString();
-    final formType = (form['form_type'] ?? 'heat_network_assessment')
+    final formType = (form['form_type'] ?? kHeatNetworkAssessmentFormType)
         .toString();
     final uuid = (form['uuid'] ?? '').toString();
 

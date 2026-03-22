@@ -1,8 +1,8 @@
 import 'package:audit_pro_mobile/apm/config/api_config.dart';
 import 'package:audit_pro_mobile/apm/services/portal_api_client.dart';
 
-class HnaStartEditSessionResponse {
-  const HnaStartEditSessionResponse({
+class FormsStartEditSessionResponse {
+  const FormsStartEditSessionResponse({
     required this.sessionToken,
     required this.expiresAtUtc,
     required this.submissionId,
@@ -29,8 +29,8 @@ class HnaStartEditSessionResponse {
     return DateTime.tryParse(s);
   }
 
-  factory HnaStartEditSessionResponse.fromJson(Map raw) {
-    return HnaStartEditSessionResponse(
+  factory FormsStartEditSessionResponse.fromJson(Map raw) {
+    return FormsStartEditSessionResponse(
       sessionToken: _readStringAny(raw, ['sessionToken', 'SessionToken']),
       expiresAtUtc: _readDateTimeAny(raw, ['expiresAtUtc', 'ExpiresAtUtc']),
       submissionId: _readStringAny(raw, ['submissionId', 'SubmissionId']),
@@ -39,20 +39,22 @@ class HnaStartEditSessionResponse {
   }
 }
 
-class HnaEditSessionSnapshot {
-  const HnaEditSessionSnapshot({
+class FormsEditSessionSnapshot {
+  const FormsEditSessionSnapshot({
+    required this.formType,
     required this.submissionId,
     required this.submittedAtUtc,
     required this.schemaVersion,
     required this.appVersion,
-    required this.assessment,
+    required this.formPayload,
   });
 
+  final String formType;
   final String submissionId;
   final DateTime? submittedAtUtc;
   final int? schemaVersion;
   final String appVersion;
-  final Map<String, dynamic> assessment;
+  final Map<String, dynamic> formPayload;
 
   static String _readStringAny(Map raw, List<String> keys) {
     for (final k in keys) {
@@ -87,8 +89,9 @@ class HnaEditSessionSnapshot {
     return const <String, dynamic>{};
   }
 
-  factory HnaEditSessionSnapshot.fromJson(Map raw) {
-    return HnaEditSessionSnapshot(
+  factory FormsEditSessionSnapshot.fromJson(Map raw) {
+    return FormsEditSessionSnapshot(
+      formType: _readStringAny(raw, ['formType', 'FormType']),
       submissionId: _readStringAny(raw, ['submissionId', 'SubmissionId']),
       submittedAtUtc: _readDateTimeAny(raw, [
         'submittedAtUtc',
@@ -96,24 +99,24 @@ class HnaEditSessionSnapshot {
       ]),
       schemaVersion: _readIntAny(raw, ['schemaVersion', 'SchemaVersion']),
       appVersion: _readStringAny(raw, ['appVersion', 'AppVersion']),
-      assessment: _readMapAny(raw, ['assessment', 'Assessment']),
+      formPayload: _readMapAny(raw, ['formPayload', 'FormPayload']),
     );
   }
 }
 
-class HnaEditSessionsService {
-  HnaEditSessionsService({PortalApiClient? apiClient})
+class FormsEditSessionsService {
+  FormsEditSessionsService({PortalApiClient? apiClient})
     : apiClient =
           apiClient ?? PortalApiClient(baseUrl: ApiConfig.portalBaseUrl);
 
   final PortalApiClient apiClient;
 
-  Future<HnaStartEditSessionResponse> start({
+  Future<FormsStartEditSessionResponse> start({
     required String token,
     required String editRequestId,
   }) async {
     final json = await apiClient.postJson(
-      '/api/mobile/hna/edit-sessions/start',
+      '/api/mobile/edit-sessions/start',
       bearerToken: token,
       body: {'editRequestId': editRequestId},
     );
@@ -130,7 +133,7 @@ class HnaEditSessionsService {
       throw PortalApiException('Invalid start edit session response.');
     }
 
-    final dto = HnaStartEditSessionResponse.fromJson(data);
+    final dto = FormsStartEditSessionResponse.fromJson(data);
     if (dto.sessionToken.trim().isEmpty) {
       throw PortalApiException('Edit session did not return a token.');
     }
@@ -138,12 +141,12 @@ class HnaEditSessionsService {
     return dto;
   }
 
-  Future<HnaEditSessionSnapshot> snapshot({
+  Future<FormsEditSessionSnapshot> snapshot({
     required String token,
     required String sessionToken,
   }) async {
     final json = await apiClient.postJson(
-      '/api/mobile/hna/edit-sessions/snapshot',
+      '/api/mobile/edit-sessions/snapshot',
       bearerToken: token,
       body: {'sessionToken': sessionToken},
     );
@@ -159,22 +162,22 @@ class HnaEditSessionsService {
       throw PortalApiException('Invalid snapshot response.');
     }
 
-    return HnaEditSessionSnapshot.fromJson(data);
+    return FormsEditSessionSnapshot.fromJson(data);
   }
 
   Future<String> submitRevision({
     required String token,
     required String sessionToken,
-    required Map<String, dynamic> assessment,
+    required Map<String, dynamic> formPayload,
     required int schemaVersion,
     required String appVersion,
   }) async {
     final json = await apiClient.postJson(
-      '/api/mobile/hna/edit-sessions/submit-revision',
+      '/api/mobile/edit-sessions/submit-revision',
       bearerToken: token,
       body: {
         'sessionToken': sessionToken,
-        'assessment': assessment,
+        'formPayload': formPayload,
         'schemaVersion': schemaVersion,
         'appVersion': appVersion,
       },

@@ -201,6 +201,7 @@ class _AssetsListScreenState extends State<AssetsListScreen> {
                               onDismissed: (direction) async {
                                 await DatabaseHelper.instance.deleteAsset(
                                   asset['id'] as int,
+                                  formId: _formId,
                                 );
                                 _loadAssets();
                               },

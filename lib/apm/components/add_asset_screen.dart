@@ -4,6 +4,7 @@ import '../services/platform/image_persistence.dart';
 import '../database/database_helper.dart';
 import '../components/app_scaffold.dart';
 import '../components/app_autocomplete_field.dart';
+import '../components/form_widgets.dart';
 
 class AddAssetScreen extends StatefulWidget {
   const AddAssetScreen({super.key});
@@ -621,6 +622,25 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
                                     }
                                     return null;
                                   },
+                                ),
+                                const SizedBox(height: 24),
+
+                                Text(
+                                  'Asset Images',
+                                  style: Theme.of(context).textTheme.titleMedium
+                                      ?.copyWith(fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Add at least one image.',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                                AppMultiImageCapture(
+                                  images: _images,
+                                  onImagesChanged: (images) {
+                                    setState(() => _images = images);
+                                  },
+                                  maxImages: 8,
                                 ),
                                 const SizedBox(height: 24),
                                 ElevatedButton.icon(

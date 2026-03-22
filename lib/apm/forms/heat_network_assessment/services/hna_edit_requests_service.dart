@@ -2,8 +2,8 @@ import 'package:audit_pro_mobile/apm/config/api_config.dart';
 import 'package:audit_pro_mobile/apm/services/portal_api_client.dart';
 import 'package:audit_pro_mobile/logging/apm_logger.dart';
 
-class HnaPendingEditRequest {
-  const HnaPendingEditRequest({
+class FormPendingEditRequest {
+  const FormPendingEditRequest({
     required this.editRequestId,
     required this.submissionId,
     required this.tenantId,
@@ -36,7 +36,7 @@ class HnaPendingEditRequest {
     return DateTime.tryParse(s);
   }
 
-  factory HnaPendingEditRequest.fromJson(Map raw) {
+  factory FormPendingEditRequest.fromJson(Map raw) {
     final editRequestId = _readStringAny(raw, [
       'editRequestId',
       'EditRequestId',
@@ -63,7 +63,7 @@ class HnaPendingEditRequest {
       'RequestedAt',
     ]);
 
-    return HnaPendingEditRequest(
+    return FormPendingEditRequest(
       editRequestId: editRequestId,
       submissionId: submissionId,
       tenantId: tenantId,
@@ -75,22 +75,22 @@ class HnaPendingEditRequest {
   }
 }
 
-class HnaEditRequestsService {
-  HnaEditRequestsService({PortalApiClient? apiClient})
+class FormsEditRequestsService {
+  FormsEditRequestsService({PortalApiClient? apiClient})
     : apiClient =
           apiClient ?? PortalApiClient(baseUrl: ApiConfig.portalBaseUrl);
 
   final PortalApiClient apiClient;
 
-  Future<List<HnaPendingEditRequest>> getPending({
+  Future<List<FormPendingEditRequest>> getPending({
     required String token,
   }) async {
-    const path = '/api/mobile/hna/edit-requests/pending';
+    const path = '/api/mobile/edit-requests/pending';
 
     ApmLogger.debug(
       'Checking pending edit requests (baseUrl: {BaseUrl}, tokenLen: {TokenLen})',
       args: [ApiConfig.portalBaseUrl, token.length],
-      category: 'HNA/EditRequests',
+      category: 'APM/EditRequests',
     );
 
     Map<String, dynamic> json;
@@ -101,12 +101,12 @@ class HnaEditRequestsService {
       ApmLogger.debug(
         'Pending edit requests request failed: {Error}',
         args: [e.toString()],
-        category: 'HNA/EditRequests',
+        category: 'APM/EditRequests',
       );
       ApmLogger.debug(
         'Pending edit requests request failed stack: {Stack}',
         args: [st.toString()],
-        category: 'HNA/EditRequests',
+        category: 'APM/EditRequests',
       );
       rethrow;
     }
@@ -123,7 +123,7 @@ class HnaEditRequestsService {
 
     final items = data
         .whereType<Map>()
-        .map((m) => HnaPendingEditRequest.fromJson(m))
+        .map((m) => FormPendingEditRequest.fromJson(m))
         .where((r) => r.editRequestId.isNotEmpty)
         .toList();
 
@@ -137,7 +137,7 @@ class HnaEditRequestsService {
             .where((id) => id.trim().isNotEmpty)
             .join(', '),
       ],
-      category: 'HNA/EditRequests',
+      category: 'APM/EditRequests',
     );
 
     return items;

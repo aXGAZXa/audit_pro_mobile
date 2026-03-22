@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 
 import '../app/app_scaffold.dart';
-import '../apm_test/apm_test_form_screen.dart';
 import '../apm/database/database_helper.dart';
+import '../apm/forms/condition_report/condition_report_definition.dart';
+import '../apm/forms/condition_report/condition_report_screen.dart';
+import '../apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
 import '../auth/auth_session.dart';
 import '../hna/heat_network_assessment/heat_network_assessment_screen.dart';
 
@@ -31,26 +32,92 @@ class FormsHomeScreen extends StatelessWidget {
                 await _openHnaFromHome(context);
               },
             ),
-            if (!kReleaseMode) ...[
-              const SizedBox(height: 12),
-              _buildFormCard(
-                context,
-                title: 'APM Test Feature',
-                description: 'Development-only end-to-end submission test.',
-                icon: Icons.fact_check,
-                color: Colors.blueGrey,
-                onTap: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute(
-                      settings: const RouteSettings(name: '/apm-test'),
-                      builder: (_) => ApmTestFormScreen(session: session),
-                    ),
-                  );
-                },
-              ),
-            ],
+            const SizedBox(height: 12),
+            _buildFormCard(
+              context,
+              title: 'Condition Report',
+              icon: Icons.assignment,
+              color: Colors.blue.shade400,
+              onTap: () async {
+                await _openCrFromHome(context);
+              },
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _openCrFromHome(BuildContext context) async {
+    final db = DatabaseHelper.instance;
+
+    final drafts = await db.getFormsIndex(
+      formType: kConditionReportFormType,
+      statuses: const ['draft'],
+    );
+
+    if (!context.mounted) return;
+
+    if (drafts.isNotEmpty) {
+      final currentId = await db.getCurrentFormId(kConditionReportFormType);
+
+      if (!context.mounted) return;
+
+      final resumeId =
+          (currentId != null &&
+              drafts.any((d) => (d['id'] as int?) == currentId))
+          ? currentId
+          : (drafts.first['id'] as int);
+
+      final choice = await showDialog<_HomeFormChoice>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Unfinished form found'),
+            content: const Text(
+              'You have an unfinished Condition Report. Do you want to start a new one or continue where you left off?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () =>
+                    Navigator.of(context).pop(_HomeFormChoice.cancel),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () =>
+                    Navigator.of(context).pop(_HomeFormChoice.resumeExisting),
+                child: const Text('Continue'),
+              ),
+              FilledButton(
+                onPressed: () =>
+                    Navigator.of(context).pop(_HomeFormChoice.startNew),
+                child: const Text('Start new'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (!context.mounted) return;
+      if (choice == null || choice == _HomeFormChoice.cancel) return;
+
+      if (choice == _HomeFormChoice.resumeExisting) {
+        if (!context.mounted) return;
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            settings: const RouteSettings(name: '/condition-report'),
+            builder: (_) => ConditionReportScreen(formId: resumeId),
+          ),
+        );
+        return;
+      }
+    }
+
+    if (!context.mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        settings: const RouteSettings(name: '/condition-report'),
+        builder: (_) => const ConditionReportScreen(forceNew: true),
       ),
     );
   }
@@ -59,14 +126,16 @@ class FormsHomeScreen extends StatelessWidget {
     final db = DatabaseHelper.instance;
 
     final drafts = await db.getFormsIndex(
-      formType: 'heat_network_assessment',
+      formType: kHeatNetworkAssessmentFormType,
       statuses: const ['draft'],
     );
 
     if (!context.mounted) return;
 
     if (drafts.isNotEmpty) {
-      final currentId = await db.getCurrentFormId('heat_network_assessment');
+      final currentId = await db.getCurrentFormId(
+        kHeatNetworkAssessmentFormType,
+      );
 
       if (!context.mounted) return;
 

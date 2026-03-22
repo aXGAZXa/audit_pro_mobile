@@ -1,16 +1,20 @@
-import 'package:flutter/material.dart';
 import 'package:gtapp_mobile/gtapp_mobile.dart' hide FormState;
-
+import 'package:flutter/material.dart';
 import '../auth/auth_session.dart';
 import '../auth/login_screen.dart';
 import '../logging/apm_logger.dart';
-import '../apm_test/apm_test_form_screen.dart';
-import '../apm_test/apm_test_submissions_screen.dart';
+import '../apm/components/add_asset_screen.dart';
 import '../apm/components/observations_list_screen.dart';
+import '../apm/forms/condition_report/screens/add_plant_room_screen.dart';
+import '../apm/forms/condition_report/screens/plant_room_electrical_screen.dart';
+import '../apm/forms/condition_report/screens/plant_room_gas_pipework_screen.dart';
+import '../apm/forms/condition_report/screens/plant_room_general_screen.dart';
+import '../apm/forms/condition_report/screens/plant_room_hydraulics_screen.dart';
+import '../apm/forms/condition_report/screens/plant_room_ventilation_screen.dart';
 import '../apm/forms/heat_network_assessment/heat_network_assessment_screen.dart';
 import '../apm/forms/heat_network_assessment/services/hna_edit_requests_service.dart';
 import '../apm/forms/heat_network_assessment/services/hna_edit_session_snapshot_hydrator.dart';
-import '../apm/forms/heat_network_assessment/services/hna_edit_sessions_service.dart';
+import '../apm/forms/services/forms_edit_sessions_service.dart';
 import '../apm/forms/shared/screens/add_observation_screen.dart';
 import '../apm/services/daily_maintenance_service.dart';
 import '../screens/forms_home_screen.dart';
@@ -32,9 +36,9 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
   late final Future<void> _loadFuture;
   late final DailyMaintenanceService _daily;
 
-  final _editRequestsService = HnaEditRequestsService();
-  final _editSessionsService = HnaEditSessionsService();
-  final _hydrator = HnaEditSessionSnapshotHydrator();
+  final _editRequestsService = FormsEditRequestsService();
+  final _editSessionsService = FormsEditSessionsService();
+  final _hydrator = FormEditSessionSnapshotHydrator();
 
   late final _navObserver = _AppNavObserver(onRouteChanged: _onRouteChanged);
   String? _topRouteName;
@@ -78,12 +82,7 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
 
   bool _isInFormRoute(String? routeName) {
     final r = (routeName ?? '').trim();
-    return r == '/hna' ||
-        r.startsWith('/hna/') ||
-        r == '/hna-web-editor' ||
-        r == '/apm-test' ||
-        r.startsWith('/apm-test/') ||
-        r == '/apm-test-web-editor';
+    return r == '/hna' || r.startsWith('/hna/') || r == '/hna-web-editor';
   }
 
   Future<void> _tryRunDailyMaintenance({required String reason}) async {
@@ -109,7 +108,7 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
 
       ApmLogger.info(
         'Daily pending edit-request check',
-        category: 'HNA/EditRequests',
+        category: 'APM/EditRequests',
       );
 
       final pending = await _editRequestsService.getPending(token: token);
@@ -187,7 +186,7 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
       ApmLogger.warning(
         'Daily pending edit-request check failed: {Error}',
         args: [e.toString()],
-        category: 'HNA/EditRequests',
+        category: 'APM/EditRequests',
         error: e,
         stackTrace: st,
       );
@@ -196,7 +195,7 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
 
   Future<void> _startEditNow({
     required String token,
-    required HnaPendingEditRequest request,
+    required FormPendingEditRequest request,
   }) async {
     try {
       final start = await _editSessionsService.start(
@@ -210,7 +209,7 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
       );
 
       final newFormId = await _hydrator.createDraftFromSnapshot(
-        assessment: snapshot.assessment,
+        assessment: snapshot.formPayload,
         token: token,
         sessionToken: start.sessionToken,
         editRequestId: request.editRequestId,
@@ -234,7 +233,7 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
       ApmLogger.warning(
         'Start edit from daily popup failed: {Error}',
         args: [e.toString()],
-        category: 'HNA/EditRequests',
+        category: 'APM/EditRequests',
         error: e,
         stackTrace: st,
       );
@@ -293,11 +292,49 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
           '/my-forms': (context) => MyFormsScreen(session: _session),
           '/platform': (context) =>
               PlaceholderScreen(session: _session, title: 'Platform Access'),
-          '/apm-test': (context) => ApmTestFormScreen(session: _session),
-          '/apm-test/submissions': (context) =>
-              ApmTestSubmissionsScreen(session: _session),
           '/settings': (context) => SettingsScreen(session: _session),
           '/submissions': (context) => SubmissionsScreen(session: _session),
+        },
+        onGenerateRoute: (settings) {
+          switch (settings.name) {
+            case '/add-asset':
+              return MaterialPageRoute(
+                settings: settings,
+                builder: (_) => const AddAssetScreen(),
+              );
+            case '/add-plant-room':
+              return MaterialPageRoute(
+                settings: settings,
+                builder: (_) => const AddPlantRoomScreen(),
+              );
+            case '/plant-room-ventilation':
+              return MaterialPageRoute(
+                settings: settings,
+                builder: (_) => const PlantRoomVentilationScreen(),
+              );
+            case '/plant-room-gas-pipework':
+              return MaterialPageRoute(
+                settings: settings,
+                builder: (_) => const PlantRoomGasPipeworkScreen(),
+              );
+            case '/plant-room-general':
+              return MaterialPageRoute(
+                settings: settings,
+                builder: (_) => const PlantRoomGeneralScreen(),
+              );
+            case '/plant-room-electrical':
+              return MaterialPageRoute(
+                settings: settings,
+                builder: (_) => const PlantRoomElectricalScreen(),
+              );
+            case '/plant-room-hydraulics':
+              return MaterialPageRoute(
+                settings: settings,
+                builder: (_) => const PlantRoomHydraulicsScreen(),
+              );
+            default:
+              return null;
+          }
         },
       ),
     );

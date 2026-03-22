@@ -10,6 +10,8 @@ import 'package:audit_pro_mobile/apm/models/heat_generator.dart';
 import 'package:audit_pro_mobile/apm/models/communal_control.dart';
 import 'package:audit_pro_mobile/apm/models/dhw_plant.dart';
 import 'package:audit_pro_mobile/apm/models/dwelling_inspection.dart';
+import 'package:audit_pro_mobile/apm/forms/condition_report/condition_report_definition.dart';
+import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._internal();
@@ -1647,6 +1649,34 @@ class DatabaseHelper {
 
   // ========== OBSERVATION OPERATIONS ==========
 
+  static const Set<String> _jsonBackedFormTypes = {
+    kConditionReportFormType,
+    kHeatNetworkAssessmentFormType,
+  };
+
+  Future<Map<String, dynamic>?> _getConditionReportFormForId(int formId) async {
+    final form = await getForm(formId);
+    if (form == null) return null;
+    final formType = (form['form_type'] ?? '').toString();
+    if (!_jsonBackedFormTypes.contains(formType)) {
+      return null;
+    }
+    return form;
+  }
+
+  int _asIntValue(dynamic value, {int fallback = 0}) {
+    if (value is int) return value;
+    return int.tryParse(value?.toString() ?? '') ?? fallback;
+  }
+
+  String _asStringValue(dynamic value) => value?.toString() ?? '';
+
+  int _observationCreatedSort(Map<String, dynamic> row) =>
+      _asIntValue(row['created_sort']);
+
+  int _unsafeReportCreatedSort(Map<String, dynamic> row) =>
+      _asIntValue(row['created_sort']);
+
   /// Save or update an observation
   Future<int> saveObservation({
     int? id,
@@ -1672,10 +1702,27 @@ class DatabaseHelper {
     String? unsafeSentVia,
     String? unsafeSentTo,
   }) async {
-    final db = await database;
-    final now = DateTime.now().toIso8601String();
+    final conditionReportForm = await _getConditionReportFormForId(formId);
+    if (conditionReportForm == null) {
+      throw StateError(
+        'Form $formId is not a JSON-backed APM form (expected ${_jsonBackedFormTypes.join(', ')})',
+      );
+    }
 
-    final data = {
+    final now = DateTime.now().toIso8601String();
+    final formDataRaw = conditionReportForm['form_data'];
+    final formData = formDataRaw is Map
+        ? Map<String, dynamic>.from(formDataRaw)
+        : <String, dynamic>{};
+
+    final observations = _readJsonList(formData, 'observations');
+    final resolvedId = id ?? await _nextConditionReportEntityId('observations');
+    final index = observations.indexWhere((row) => row['id'] == resolvedId);
+    final existing = index >= 0 ? observations[index] : <String, dynamic>{};
+
+    final observation = <String, dynamic>{
+      ...existing,
+      'id': resolvedId,
       'form_id': formId,
       'attached_to_type': 'question',
       'attached_to_id': questionReference,
@@ -1699,39 +1746,23 @@ class DatabaseHelper {
       'unsafe_checked_date': unsafeCheckedDate,
       'unsafe_sent_via': unsafeSentVia,
       'unsafe_sent_to': unsafeSentTo,
+      'images': (imagePaths ?? (existing['images'] as List?) ?? <String>[])
+          .map((e) => e.toString())
+          .toList(growable: false),
+      'created_at': existing['created_at'] ?? now,
       'updated_at': now,
     };
 
-    int observationId;
-    if (id == null) {
-      // Create new observation
-      data['created_at'] = now;
-      observationId = await db.insert('observations', data);
+    if (index >= 0) {
+      observations[index] = observation;
     } else {
-      // Update existing observation
-      await db.update('observations', data, where: 'id = ?', whereArgs: [id]);
-      observationId = id;
-
-      // Delete old images for this observation
-      await db.delete(
-        'observation_images',
-        where: 'observation_id = ?',
-        whereArgs: [observationId],
-      );
+      observations.add(observation);
     }
 
-    // Save image paths
-    if (imagePaths != null && imagePaths.isNotEmpty) {
-      for (final path in imagePaths) {
-        await db.insert('observation_images', {
-          'observation_id': observationId,
-          'image_path': path,
-          'created_at': now,
-        });
-      }
-    }
-
-    return observationId;
+    formData['observations'] = observations;
+    conditionReportForm['form_data'] = formData;
+    await _persistFormData(conditionReportForm);
+    return resolvedId;
   }
 
   /// Get an observation with its images
@@ -1739,114 +1770,90 @@ class DatabaseHelper {
     int formId,
     String questionReference,
   ) async {
-    final db = await database;
-
-    // Get observation
-    final observations = await db.query(
-      'observations',
-      where: 'form_id = ? AND attached_to_type = ? AND attached_to_id = ?',
-      whereArgs: [formId, 'question', questionReference],
+    final observations = await getQuestionObservations(
+      formId,
+      questionReference,
     );
-
-    if (observations.isEmpty) return null;
-
-    final observation = Map<String, dynamic>.from(observations.first);
-
-    // Get associated images
-    final images = await db.query(
-      'observation_images',
-      where: 'observation_id = ?',
-      whereArgs: [observation['id']],
-      orderBy: 'created_at ASC',
-    );
-
-    observation['images'] = images.map((img) => img['image_path']).toList();
-    return observation;
+    return observations.isNotEmpty ? observations.first : null;
   }
 
   /// Get an observation by ID
   Future<Map<String, dynamic>?> getObservationById(int observationId) async {
-    final db = await database;
-
-    // Get observation
-    final observations = await db.query(
-      'observations',
-      where: 'id = ?',
-      whereArgs: [observationId],
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'observations',
+      entityId: observationId,
     );
+    if (form != null) {
+      final formDataRaw = form['form_data'];
+      if (formDataRaw is! Map) return null;
+      final formData = Map<String, dynamic>.from(formDataRaw);
+      final observations = _readJsonList(formData, 'observations');
+      final idx = observations.indexWhere((row) => row['id'] == observationId);
+      if (idx < 0) return null;
+      final row = Map<String, dynamic>.from(observations[idx]);
+      final imagesRaw = row['images'];
+      row['images'] = imagesRaw is List
+          ? imagesRaw.map((e) => e.toString()).toList(growable: false)
+          : <String>[];
+      return row;
+    }
 
-    if (observations.isEmpty) return null;
-
-    final observation = Map<String, dynamic>.from(observations.first);
-
-    // Get associated images
-    final images = await db.query(
-      'observation_images',
-      where: 'observation_id = ?',
-      whereArgs: [observation['id']],
-      orderBy: 'created_at ASC',
-    );
-
-    observation['images'] = images.map((img) => img['image_path']).toList();
-    return observation;
+    return null;
   }
 
   /// Get all unsafe observations for a form
   Future<List<Map<String, dynamic>>> getUnsafeObservations(int formId) async {
-    final db = await database;
+    final observations = await getFormObservations(formId);
+    final unsafe = observations
+        .where((row) {
+          final flag = row['is_unsafe'];
+          return flag == true || flag == 1 || flag?.toString() == '1';
+        })
+        .toList(growable: false);
 
-    final observations = await db.query(
-      'observations',
-      where: 'form_id = ? AND is_unsafe = 1',
-      whereArgs: [formId],
-      orderBy: 'created_at DESC',
+    unsafe.sort(
+      (a, b) =>
+          _observationCreatedSort(b).compareTo(_observationCreatedSort(a)),
     );
 
-    final result = <Map<String, dynamic>>[];
-    for (final obs in observations) {
-      final observation = Map<String, dynamic>.from(obs);
-
-      // Get associated images
-      final images = await db.query(
-        'observation_images',
-        where: 'observation_id = ?',
-        whereArgs: [observation['id']],
-        orderBy: 'created_at ASC',
-      );
-
-      observation['images'] = images.map((img) => img['image_path']).toList();
-      result.add(observation);
-    }
-
-    return result;
+    return unsafe;
   }
 
   /// Get all observations for a form
   Future<List<Map<String, dynamic>>> getFormObservations(int formId) async {
-    final db = await database;
+    final form = await getForm(formId);
+    if (form == null) return <Map<String, dynamic>>[];
 
-    final observations = await db.query(
-      'observations',
-      where: 'form_id = ?',
-      whereArgs: [formId],
-      orderBy: 'created_at ASC',
-    );
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return <Map<String, dynamic>>[];
 
-    // Get images for each observation
-    final result = <Map<String, dynamic>>[];
-    for (final obs in observations) {
-      final observation = Map<String, dynamic>.from(obs);
-      final images = await db.query(
-        'observation_images',
-        where: 'observation_id = ?',
-        whereArgs: [observation['id']],
-        orderBy: 'created_at ASC',
-      );
-      observation['images'] = images.map((img) => img['image_path']).toList();
-      result.add(observation);
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final observations = _readJsonList(formData, 'observations');
+
+    for (var i = 0; i < observations.length; i++) {
+      final row = Map<String, dynamic>.from(observations[i]);
+      final createdAt = _asStringValue(row['created_at']);
+      row['created_sort'] =
+          DateTime.tryParse(createdAt)?.millisecondsSinceEpoch ?? 0;
+      final imagesRaw = row['images'];
+      row['images'] = imagesRaw is List
+          ? imagesRaw.map((e) => e.toString()).toList(growable: false)
+          : <String>[];
+      observations[i] = row;
     }
 
-    return result;
+    observations.sort(
+      (a, b) =>
+          _observationCreatedSort(a).compareTo(_observationCreatedSort(b)),
+    );
+
+    return observations
+        .map((row) {
+          final copy = Map<String, dynamic>.from(row);
+          copy.remove('created_sort');
+          return copy;
+        })
+        .toList(growable: false);
   }
 
   /// Get all observations for a specific question in a form
@@ -1854,36 +1861,52 @@ class DatabaseHelper {
     int formId,
     String questionReference,
   ) async {
-    final db = await database;
-
-    final observations = await db.query(
-      'observations',
-      where: 'form_id = ? AND attached_to_type = ? AND attached_to_id = ?',
-      whereArgs: [formId, 'question', questionReference],
-      orderBy: 'created_at ASC',
-    );
-
-    // Get images for each observation
-    final result = <Map<String, dynamic>>[];
-    for (final obs in observations) {
-      final observation = Map<String, dynamic>.from(obs);
-      final images = await db.query(
-        'observation_images',
-        where: 'observation_id = ?',
-        whereArgs: [observation['id']],
-        orderBy: 'created_at ASC',
-      );
-      observation['images'] = images.map((img) => img['image_path']).toList();
-      result.add(observation);
-    }
-
-    return result;
+    final observations = await getFormObservations(formId);
+    return observations
+        .where(
+          (row) =>
+              _asStringValue(row['attached_to_type']) == 'question' &&
+              _asStringValue(row['attached_to_id']) == questionReference,
+        )
+        .toList(growable: false);
   }
 
   /// Delete an observation and its images
   Future<void> deleteObservation(int id) async {
-    final db = await database;
-    await db.delete('observations', where: 'id = ?', whereArgs: [id]);
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'observations',
+      entityId: id,
+    );
+    if (form != null) {
+      final formDataRaw = form['form_data'];
+      if (formDataRaw is! Map) return;
+
+      final formData = Map<String, dynamic>.from(formDataRaw);
+      final observations = _readJsonList(formData, 'observations')
+        ..removeWhere((row) => row['id'] == id);
+
+      final unsafeReports = _readJsonList(formData, 'unsafeReports');
+      for (var i = 0; i < unsafeReports.length; i++) {
+        final report = Map<String, dynamic>.from(unsafeReports[i]);
+        final ids = (report['observation_ids'] is List)
+            ? (report['observation_ids'] as List)
+                  .map((e) => _asIntValue(e, fallback: -1))
+                  .where((e) => e >= 0 && e != id)
+                  .toList(growable: false)
+            : <int>[];
+        report['observation_ids'] = ids;
+        report['observation_count'] = ids.length;
+        unsafeReports[i] = report;
+      }
+
+      formData['observations'] = observations;
+      formData['unsafeReports'] = unsafeReports;
+      form['form_data'] = formData;
+      await _persistFormData(form);
+      return;
+    }
+
+    return;
   }
 
   // ========== SETTINGS OPERATIONS ==========
@@ -1938,154 +1961,220 @@ class DatabaseHelper {
     String? reportedInternally,
     required List<int> observationIds,
   }) async {
-    final db = await database;
-    final now = DateTime.now().toIso8601String();
+    final conditionReportForm = await _getConditionReportFormForId(formId);
+    if (conditionReportForm == null) {
+      throw StateError(
+        'Form $formId is not a JSON-backed APM form (expected ${_jsonBackedFormTypes.join(', ')})',
+      );
+    }
 
-    final data = {
+    final now = DateTime.now().toIso8601String();
+    final formDataRaw = conditionReportForm['form_data'];
+    final formData = formDataRaw is Map
+        ? Map<String, dynamic>.from(formDataRaw)
+        : <String, dynamic>{};
+
+    final reports = _readJsonList(formData, 'unsafeReports');
+    final resolvedId =
+        id ?? await _nextConditionReportEntityId('unsafeReports');
+    final idx = reports.indexWhere((row) => row['id'] == resolvedId);
+    final existing = idx >= 0 ? reports[idx] : <String, dynamic>{};
+
+    final normalizedObservationIds = observationIds
+        .map((v) => _asIntValue(v, fallback: -1))
+        .where((v) => v >= 0)
+        .toList(growable: false);
+
+    final report = <String, dynamic>{
+      ...existing,
+      'id': resolvedId,
       'form_id': formId,
       'action_taken': actionTaken,
       'warning_notice_image': warningNoticeImage,
       'after_image': afterImage,
       'reported_to_client': reportedToClient,
       'reported_internally': reportedInternally,
+      'observation_ids': normalizedObservationIds,
+      'observation_count': normalizedObservationIds.length,
+      'created_at': existing['created_at'] ?? now,
       'updated_at': now,
     };
 
-    int reportId;
-    if (id == null) {
-      // Create new report
-      data['created_at'] = now;
-      reportId = await db.insert('unsafe_reports', data);
+    if (idx >= 0) {
+      reports[idx] = report;
     } else {
-      // Update existing report
-      await db.update('unsafe_reports', data, where: 'id = ?', whereArgs: [id]);
-      reportId = id;
-
-      // Delete old observation links
-      await db.delete(
-        'report_observations',
-        where: 'report_id = ?',
-        whereArgs: [reportId],
-      );
+      reports.add(report);
     }
 
-    // Link observations to report
-    for (final obsId in observationIds) {
-      await db.insert('report_observations', {
-        'report_id': reportId,
-        'observation_id': obsId,
-      });
-    }
-
-    return reportId;
+    formData['unsafeReports'] = reports;
+    conditionReportForm['form_data'] = formData;
+    await _persistFormData(conditionReportForm);
+    return resolvedId;
   }
 
   /// Get all unsafe reports for a form
   Future<List<Map<String, dynamic>>> getUnsafeReports(int formId) async {
-    final db = await database;
+    final form = await getForm(formId);
+    if (form == null) return <Map<String, dynamic>>[];
 
-    final reports = await db.query(
-      'unsafe_reports',
-      where: 'form_id = ?',
-      whereArgs: [formId],
-      orderBy: 'created_at DESC',
-    );
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return <Map<String, dynamic>>[];
 
-    final result = <Map<String, dynamic>>[];
-    for (final report in reports) {
-      final reportMap = Map<String, dynamic>.from(report);
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final reports = _readJsonList(formData, 'unsafeReports');
 
-      // Get linked observations
-      final obsLinks = await db.query(
-        'report_observations',
-        where: 'report_id = ?',
-        whereArgs: [report['id']],
-      );
-
-      final observationIds = obsLinks
-          .map((link) => link['observation_id'])
-          .toList();
-      reportMap['observation_ids'] = observationIds;
-      reportMap['observation_count'] = observationIds.length;
-
-      result.add(reportMap);
+    for (var i = 0; i < reports.length; i++) {
+      final report = Map<String, dynamic>.from(reports[i]);
+      final ids = (report['observation_ids'] is List)
+          ? (report['observation_ids'] as List)
+                .map((e) => _asIntValue(e, fallback: -1))
+                .where((e) => e >= 0)
+                .toList(growable: false)
+          : <int>[];
+      report['observation_ids'] = ids;
+      report['observation_count'] = ids.length;
+      final createdAt = _asStringValue(report['created_at']);
+      report['created_sort'] =
+          DateTime.tryParse(createdAt)?.millisecondsSinceEpoch ?? 0;
+      reports[i] = report;
     }
 
-    return result;
+    reports.sort(
+      (a, b) =>
+          _unsafeReportCreatedSort(b).compareTo(_unsafeReportCreatedSort(a)),
+    );
+
+    return reports
+        .map((row) {
+          final copy = Map<String, dynamic>.from(row);
+          copy.remove('created_sort');
+          return copy;
+        })
+        .toList(growable: false);
   }
 
   /// Get a single unsafe report with full details
   Future<Map<String, dynamic>?> getUnsafeReport(int reportId) async {
-    final db = await database;
-
-    final reports = await db.query(
-      'unsafe_reports',
-      where: 'id = ?',
-      whereArgs: [reportId],
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'unsafeReports',
+      entityId: reportId,
     );
+    if (form != null) {
+      final formDataRaw = form['form_data'];
+      if (formDataRaw is! Map) return null;
 
-    if (reports.isEmpty) return null;
+      final formData = Map<String, dynamic>.from(formDataRaw);
+      final reports = _readJsonList(formData, 'unsafeReports');
+      final idx = reports.indexWhere((row) => row['id'] == reportId);
+      if (idx < 0) return null;
 
-    final report = Map<String, dynamic>.from(reports.first);
+      final report = Map<String, dynamic>.from(reports[idx]);
+      final ids = (report['observation_ids'] is List)
+          ? (report['observation_ids'] as List)
+                .map((e) => _asIntValue(e, fallback: -1))
+                .where((e) => e >= 0)
+                .toList(growable: false)
+          : <int>[];
 
-    // Get linked observations with full details
-    final obsLinks = await db.query(
-      'report_observations',
-      where: 'report_id = ?',
-      whereArgs: [reportId],
-    );
+      report['observation_ids'] = ids;
+      report['observation_count'] = ids.length;
 
-    final observations = <Map<String, dynamic>>[];
-    for (final link in obsLinks) {
-      final obsId = link['observation_id'] as int;
-      final obs = await getObservationById(obsId);
-      if (obs != null) {
-        observations.add(obs);
+      final observations = await getFormObservations(
+        _asIntValue(report['form_id']),
+      );
+      final observationsById = <int, Map<String, dynamic>>{};
+      for (final obs in observations) {
+        final obsId = _asIntValue(obs['id'], fallback: -1);
+        if (obsId >= 0) {
+          observationsById[obsId] = obs;
+        }
       }
+
+      report['observations'] = ids
+          .where(observationsById.containsKey)
+          .map((id) => Map<String, dynamic>.from(observationsById[id]!))
+          .toList(growable: false);
+
+      return report;
     }
 
-    report['observations'] = observations;
-    return report;
+    return null;
   }
 
   /// Check if an observation is included in any report
   Future<bool> isObservationReported(int observationId) async {
-    final db = await database;
-
-    final links = await db.query(
-      'report_observations',
-      where: 'observation_id = ?',
-      whereArgs: [observationId],
-      limit: 1,
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'observations',
+      entityId: observationId,
     );
+    if (form != null) {
+      final formDataRaw = form['form_data'];
+      if (formDataRaw is! Map) return false;
 
-    return links.isNotEmpty;
+      final formData = Map<String, dynamic>.from(formDataRaw);
+      final reports = _readJsonList(formData, 'unsafeReports');
+      for (final report in reports) {
+        final idsRaw = report['observation_ids'];
+        if (idsRaw is! List) continue;
+        final contains = idsRaw.any(
+          (id) => _asIntValue(id, fallback: -1) == observationId,
+        );
+        if (contains) return true;
+      }
+      return false;
+    }
+
+    return false;
   }
 
   /// Get all unreported unsafe observations for a form
   Future<List<Map<String, dynamic>>> getUnreportedUnsafeObservations(
     int formId,
   ) async {
-    // Get all unsafe observations
     final unsafeObs = await getUnsafeObservations(formId);
 
-    // Filter out those that are already in reports
-    final unreported = <Map<String, dynamic>>[];
-    for (final obs in unsafeObs) {
-      final isReported = await isObservationReported(obs['id'] as int);
-      if (!isReported) {
-        unreported.add(obs);
+    final reports = await getUnsafeReports(formId);
+    final reportedIds = <int>{};
+
+    for (final report in reports) {
+      final idsRaw = report['observation_ids'];
+      if (idsRaw is! List) continue;
+      for (final id in idsRaw) {
+        final parsed = _asIntValue(id, fallback: -1);
+        if (parsed >= 0) {
+          reportedIds.add(parsed);
+        }
       }
     }
 
-    return unreported;
+    return unsafeObs
+        .where((obs) {
+          final obsId = _asIntValue(obs['id'], fallback: -1);
+          return obsId < 0 || !reportedIds.contains(obsId);
+        })
+        .toList(growable: false);
   }
 
   /// Delete an unsafe report
   Future<void> deleteUnsafeReport(int reportId) async {
-    final db = await database;
-    await db.delete('unsafe_reports', where: 'id = ?', whereArgs: [reportId]);
-    // report_observations will be deleted automatically due to CASCADE
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'unsafeReports',
+      entityId: reportId,
+    );
+    if (form != null) {
+      final formDataRaw = form['form_data'];
+      if (formDataRaw is! Map) return;
+
+      final formData = Map<String, dynamic>.from(formDataRaw);
+      final reports = _readJsonList(formData, 'unsafeReports')
+        ..removeWhere((row) => row['id'] == reportId);
+      formData['unsafeReports'] = reports;
+      form['form_data'] = formData;
+      await _persistFormData(form);
+      return;
+    }
+
+    return;
   }
 
   // ========== ASSET TYPE OPERATIONS ==========
@@ -2152,6 +2241,83 @@ class DatabaseHelper {
 
   // ========== PLANT ROOM OPERATIONS ==========
 
+  List<Map<String, dynamic>> _readJsonList(
+    Map<String, dynamic> formData,
+    String key,
+  ) {
+    final raw = formData[key];
+    if (raw is! List) return <Map<String, dynamic>>[];
+    return raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: true);
+  }
+
+  Future<int> _nextConditionReportEntityId(String listKey) async {
+    final forms = <Map<String, dynamic>>[];
+    for (final formType in _jsonBackedFormTypes) {
+      forms.addAll(await getFormsByType(formType));
+    }
+    var maxId = 0;
+
+    for (final form in forms) {
+      final formDataRaw = form['form_data'];
+      if (formDataRaw is! Map) continue;
+
+      final formData = Map<String, dynamic>.from(formDataRaw);
+      final list = _readJsonList(formData, listKey);
+      for (final row in list) {
+        final rawId = row['id'];
+        final parsed = rawId is int
+            ? rawId
+            : int.tryParse(rawId?.toString() ?? '');
+        if (parsed != null && parsed > maxId) {
+          maxId = parsed;
+        }
+      }
+    }
+
+    return maxId + 1;
+  }
+
+  Future<Map<String, dynamic>?> _findConditionReportFormContainingEntity({
+    required String listKey,
+    required int entityId,
+  }) async {
+    final forms = <Map<String, dynamic>>[];
+    for (final formType in _jsonBackedFormTypes) {
+      forms.addAll(await getFormsByType(formType));
+    }
+    for (final form in forms) {
+      final formDataRaw = form['form_data'];
+      if (formDataRaw is! Map) continue;
+
+      final formData = Map<String, dynamic>.from(formDataRaw);
+      final list = _readJsonList(formData, listKey);
+      final hasEntity = list.any((row) => row['id'] == entityId);
+      if (hasEntity) return form;
+    }
+    return null;
+  }
+
+  Future<void> _persistFormData(Map<String, dynamic> form) async {
+    final id = form['id'] as int?;
+    final formType = (form['form_type'] ?? '').toString();
+    final status = (form['status'] ?? 'draft').toString();
+    final formDataRaw = form['form_data'];
+
+    if (id == null || formType.isEmpty || formDataRaw is! Map) return;
+
+    final uuid = (form['uuid'] ?? '').toString().trim();
+    await saveForm(
+      id: id,
+      formType: formType,
+      status: status,
+      formData: Map<String, dynamic>.from(formDataRaw),
+      uuid: uuid.isEmpty ? null : uuid,
+    );
+  }
+
   /// Save or update a plant room
   Future<int> savePlantRoom({
     int? id,
@@ -2160,154 +2326,109 @@ class DatabaseHelper {
     List<String>? accessImagePaths,
     List<String>? internalImagePaths,
   }) async {
-    final db = await database;
+    final form = await getForm(formId);
+    if (form == null) {
+      throw StateError('Form $formId not found');
+    }
+
+    final formDataRaw = form['form_data'];
+    final formData = formDataRaw is Map
+        ? Map<String, dynamic>.from(formDataRaw)
+        : <String, dynamic>{};
+
+    final plantRooms = _readJsonList(formData, 'plantRooms');
     final now = DateTime.now().toIso8601String();
 
-    final plantRoomData = {
+    final resolvedId = id ?? await _nextConditionReportEntityId('plantRooms');
+    final index = plantRooms.indexWhere((row) => row['id'] == resolvedId);
+    final existing = index >= 0 ? plantRooms[index] : <String, dynamic>{};
+
+    final updated = <String, dynamic>{
+      ...existing,
+      'id': resolvedId,
       'form_id': formId,
       'location': location,
+      'accessImages':
+          accessImagePaths ?? (existing['accessImages'] ?? <String>[]),
+      'internalImages':
+          internalImagePaths ?? (existing['internalImages'] ?? <String>[]),
+      'responses': existing['responses'] is Map
+          ? Map<String, dynamic>.from(existing['responses'])
+          : <String, dynamic>{},
+      'created_at': existing['created_at'] ?? now,
       'updated_at': now,
     };
 
-    if (id == null) {
-      plantRoomData['created_at'] = now;
-      id = await db.insert('plant_rooms', plantRoomData);
+    if (index >= 0) {
+      plantRooms[index] = updated;
     } else {
-      await db.update(
-        'plant_rooms',
-        plantRoomData,
-        where: 'id = ?',
-        whereArgs: [id],
-      );
+      plantRooms.add(updated);
     }
 
-    // Handle access images
-    if (accessImagePaths != null) {
-      await db.delete(
-        'plant_room_images',
-        where: 'plant_room_id = ? AND image_type = ?',
-        whereArgs: [id, 'access'],
-      );
+    formData['plantRooms'] = plantRooms;
+    form['form_data'] = formData;
+    await _persistFormData(form);
 
-      for (final imagePath in accessImagePaths) {
-        await db.insert('plant_room_images', {
-          'plant_room_id': id,
-          'image_type': 'access',
-          'image_path': imagePath,
-          'created_at': now,
-        });
-      }
-    }
-
-    // Handle internal images
-    if (internalImagePaths != null) {
-      await db.delete(
-        'plant_room_images',
-        where: 'plant_room_id = ? AND image_type = ?',
-        whereArgs: [id, 'internal'],
-      );
-
-      for (final imagePath in internalImagePaths) {
-        await db.insert('plant_room_images', {
-          'plant_room_id': id,
-          'image_type': 'internal',
-          'image_path': imagePath,
-          'created_at': now,
-        });
-      }
-    }
-
-    return id;
+    return resolvedId;
   }
 
   /// Get all plant rooms for a form
   Future<List<Map<String, dynamic>>> getPlantRooms(int formId) async {
-    final db = await database;
+    final form = await getForm(formId);
+    if (form == null) return <Map<String, dynamic>>[];
 
-    final plantRooms = await db.query(
-      'plant_rooms',
-      where: 'form_id = ?',
-      whereArgs: [formId],
-      orderBy: 'created_at ASC',
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return <Map<String, dynamic>>[];
+
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final plantRooms = _readJsonList(formData, 'plantRooms');
+
+    plantRooms.sort(
+      (a, b) => (a['created_at'] ?? '').toString().compareTo(
+        (b['created_at'] ?? '').toString(),
+      ),
     );
 
-    // Load images for each plant room and create mutable copies
-    final result = <Map<String, dynamic>>[];
-    for (final plantRoom in plantRooms) {
-      final id = plantRoom['id'] as int;
-
-      final accessImages = await db.query(
-        'plant_room_images',
-        where: 'plant_room_id = ? AND image_type = ?',
-        whereArgs: [id, 'access'],
-        orderBy: 'created_at ASC',
-      );
-
-      final internalImages = await db.query(
-        'plant_room_images',
-        where: 'plant_room_id = ? AND image_type = ?',
-        whereArgs: [id, 'internal'],
-        orderBy: 'created_at ASC',
-      );
-
-      // Create mutable copy and add images
-      final mutablePlantRoom = Map<String, dynamic>.from(plantRoom);
-      mutablePlantRoom['accessImages'] = accessImages
-          .map((img) => img['image_path'] as String)
-          .toList();
-      mutablePlantRoom['internalImages'] = internalImages
-          .map((img) => img['image_path'] as String)
-          .toList();
-
-      result.add(mutablePlantRoom);
-    }
-
-    return result;
+    return plantRooms
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList(growable: false);
   }
 
   /// Get a single plant room by ID
   Future<Map<String, dynamic>?> getPlantRoom(int id) async {
-    final db = await database;
-
-    final results = await db.query(
-      'plant_rooms',
-      where: 'id = ?',
-      whereArgs: [id],
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'plantRooms',
+      entityId: id,
     );
+    if (form == null) return null;
 
-    if (results.isEmpty) return null;
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return null;
 
-    final plantRoom = Map<String, dynamic>.from(results.first);
-
-    final accessImages = await db.query(
-      'plant_room_images',
-      where: 'plant_room_id = ? AND image_type = ?',
-      whereArgs: [id, 'access'],
-      orderBy: 'created_at ASC',
-    );
-
-    final internalImages = await db.query(
-      'plant_room_images',
-      where: 'plant_room_id = ? AND image_type = ?',
-      whereArgs: [id, 'internal'],
-      orderBy: 'created_at ASC',
-    );
-
-    plantRoom['accessImages'] = accessImages
-        .map((img) => img['image_path'] as String)
-        .toList();
-    plantRoom['internalImages'] = internalImages
-        .map((img) => img['image_path'] as String)
-        .toList();
-
-    return plantRoom;
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final plantRooms = _readJsonList(formData, 'plantRooms');
+    final row = plantRooms.firstWhere((item) => item['id'] == id);
+    return Map<String, dynamic>.from(row);
   }
 
   /// Delete a plant room
   Future<void> deletePlantRoom(int id) async {
-    final db = await database;
-    await db.delete('plant_rooms', where: 'id = ?', whereArgs: [id]);
-    // Images and responses will be automatically deleted via CASCADE
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'plantRooms',
+      entityId: id,
+    );
+    if (form == null) return;
+
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return;
+
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final plantRooms = _readJsonList(formData, 'plantRooms')
+      ..removeWhere((row) => row['id'] == id);
+
+    formData['plantRooms'] = plantRooms;
+    form['form_data'] = formData;
+    await _persistFormData(form);
   }
 
   /// Save plant room response (subsection question answer)
@@ -2316,16 +2437,32 @@ class DatabaseHelper {
     required String questionKey,
     String? answerValue,
   }) async {
-    final db = await database;
-    final now = DateTime.now().toIso8601String();
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'plantRooms',
+      entityId: plantRoomId,
+    );
+    if (form == null) return;
 
-    await db.insert('plant_room_responses', {
-      'plant_room_id': plantRoomId,
-      'question_key': questionKey,
-      'answer_value': answerValue,
-      'created_at': now,
-      'updated_at': now,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return;
+
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final plantRooms = _readJsonList(formData, 'plantRooms');
+    final idx = plantRooms.indexWhere((row) => row['id'] == plantRoomId);
+    if (idx < 0) return;
+
+    final row = Map<String, dynamic>.from(plantRooms[idx]);
+    final responses = row['responses'] is Map
+        ? Map<String, dynamic>.from(row['responses'])
+        : <String, dynamic>{};
+    responses[questionKey] = answerValue;
+    row['responses'] = responses;
+    row['updated_at'] = DateTime.now().toIso8601String();
+    plantRooms[idx] = row;
+
+    formData['plantRooms'] = plantRooms;
+    form['form_data'] = formData;
+    await _persistFormData(form);
   }
 
   /// Save multiple plant room responses at once
@@ -2333,48 +2470,85 @@ class DatabaseHelper {
     required int plantRoomId,
     required Map<String, String?> responses,
   }) async {
-    final db = await database;
-    final now = DateTime.now().toIso8601String();
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'plantRooms',
+      entityId: plantRoomId,
+    );
+    if (form == null) return;
 
-    final batch = db.batch();
-    for (final entry in responses.entries) {
-      batch.insert('plant_room_responses', {
-        'plant_room_id': plantRoomId,
-        'question_key': entry.key,
-        'answer_value': entry.value,
-        'created_at': now,
-        'updated_at': now,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
-    }
-    await batch.commit(noResult: true);
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return;
+
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final plantRooms = _readJsonList(formData, 'plantRooms');
+    final idx = plantRooms.indexWhere((row) => row['id'] == plantRoomId);
+    if (idx < 0) return;
+
+    final row = Map<String, dynamic>.from(plantRooms[idx]);
+    final existingResponses = row['responses'] is Map
+        ? Map<String, dynamic>.from(row['responses'])
+        : <String, dynamic>{};
+    existingResponses.addAll(Map<String, dynamic>.from(responses));
+    row['responses'] = existingResponses;
+    row['updated_at'] = DateTime.now().toIso8601String();
+    plantRooms[idx] = row;
+
+    formData['plantRooms'] = plantRooms;
+    form['form_data'] = formData;
+    await _persistFormData(form);
   }
 
   /// Get all responses for a plant room
   Future<Map<String, String?>> getPlantRoomResponses(int plantRoomId) async {
-    final db = await database;
-
-    final results = await db.query(
-      'plant_room_responses',
-      where: 'plant_room_id = ?',
-      whereArgs: [plantRoomId],
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'plantRooms',
+      entityId: plantRoomId,
     );
+    if (form == null) return <String, String?>{};
+
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return <String, String?>{};
+
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final plantRooms = _readJsonList(formData, 'plantRooms');
+    final idx = plantRooms.indexWhere((row) => row['id'] == plantRoomId);
+    if (idx < 0) return <String, String?>{};
+
+    final row = Map<String, dynamic>.from(plantRooms[idx]);
+    final raw = row['responses'];
+    if (raw is! Map) return <String, String?>{};
 
     final responses = <String, String?>{};
-    for (final row in results) {
-      responses[row['question_key'] as String] = row['answer_value'] as String?;
+    for (final entry in raw.entries) {
+      responses[entry.key.toString()] = entry.value?.toString();
     }
-
     return responses;
   }
 
   /// Delete all responses for a plant room
   Future<void> deletePlantRoomResponses(int plantRoomId) async {
-    final db = await database;
-    await db.delete(
-      'plant_room_responses',
-      where: 'plant_room_id = ?',
-      whereArgs: [plantRoomId],
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'plantRooms',
+      entityId: plantRoomId,
     );
+    if (form == null) return;
+
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return;
+
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final plantRooms = _readJsonList(formData, 'plantRooms');
+    final idx = plantRooms.indexWhere((row) => row['id'] == plantRoomId);
+    if (idx < 0) return;
+
+    final row = Map<String, dynamic>.from(plantRooms[idx]);
+    row['responses'] = <String, dynamic>{};
+    row['updated_at'] = DateTime.now().toIso8601String();
+    plantRooms[idx] = row;
+
+    formData['plantRooms'] = plantRooms;
+    form['form_data'] = formData;
+    await _persistFormData(form);
   }
 
   // ========== ASSET OPERATIONS ==========
@@ -2393,12 +2567,30 @@ class DatabaseHelper {
     String? visualCondition,
     List<String>? imagePaths,
   }) async {
-    final db = await database;
+    final form = await getForm(formId);
+    if (form == null) {
+      throw StateError('Form $formId not found');
+    }
+
+    final formDataRaw = form['form_data'];
+    final formData = formDataRaw is Map
+        ? Map<String, dynamic>.from(formDataRaw)
+        : <String, dynamic>{};
+
+    final assets = _readJsonList(formData, 'assets');
+    final resolvedId = id ?? await _nextConditionReportEntityId('assets');
     final now = DateTime.now().toIso8601String();
 
-    final assetData = {
+    final idx = assets.indexWhere((row) => row['id'] == resolvedId);
+    final existing = idx >= 0 ? assets[idx] : <String, dynamic>{};
+    final assetType = await getAssetType(assetTypeId);
+
+    final updated = <String, dynamic>{
+      ...existing,
+      'id': resolvedId,
       'form_id': formId,
       'asset_type_id': assetTypeId,
+      'asset_type_details': assetType,
       'asset_make': assetMake,
       'asset_model': assetModel,
       'location': location,
@@ -2406,114 +2598,115 @@ class DatabaseHelper {
       'operational': operational,
       'status': status,
       'visual_condition': visualCondition,
+      'images': imagePaths ?? (existing['images'] ?? <String>[]),
+      'created_at': existing['created_at'] ?? now,
       'updated_at': now,
     };
 
-    if (id == null) {
-      assetData['created_at'] = now;
-      id = await db.insert('assets', assetData);
+    if (idx >= 0) {
+      assets[idx] = updated;
     } else {
-      await db.update('assets', assetData, where: 'id = ?', whereArgs: [id]);
+      assets.add(updated);
     }
 
-    // Handle images
-    if (imagePaths != null) {
-      // Delete existing images
-      await db.delete('asset_images', where: 'asset_id = ?', whereArgs: [id]);
+    formData['assets'] = assets;
+    form['form_data'] = formData;
+    await _persistFormData(form);
 
-      // Insert new images
-      for (final imagePath in imagePaths) {
-        await db.insert('asset_images', {
-          'asset_id': id,
-          'image_path': imagePath,
-          'created_at': now,
-        });
-      }
-    }
-
-    return id;
+    return resolvedId;
   }
 
   /// Get all assets for a form
   Future<List<Map<String, dynamic>>> getAssets(int formId) async {
-    final db = await database;
-    final assets = await db.query(
-      'assets',
-      where: 'form_id = ?',
-      whereArgs: [formId],
-      orderBy: 'created_at DESC',
-    );
+    final form = await getForm(formId);
+    if (form == null) return <Map<String, dynamic>>[];
 
-    // Load asset type and images for each asset
-    final List<Map<String, dynamic>> result = [];
-    for (final asset in assets) {
-      final assetId = asset['id'] as int;
-      final assetTypeId = asset['asset_type_id'] as int;
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return <Map<String, dynamic>>[];
 
-      // Create a mutable copy of the asset
-      final mutableAsset = Map<String, dynamic>.from(asset);
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final assets = _readJsonList(formData, 'assets');
 
-      // Get asset type details
-      final assetType = await getAssetType(assetTypeId);
-      mutableAsset['asset_type_details'] = assetType;
-
-      // Get images
-      final images = await db.query(
-        'asset_images',
-        where: 'asset_id = ?',
-        whereArgs: [assetId],
-        orderBy: 'created_at ASC',
-      );
-      mutableAsset['images'] = images.map((img) => img['image_path']).toList();
-
-      result.add(mutableAsset);
+    for (var i = 0; i < assets.length; i++) {
+      final row = Map<String, dynamic>.from(assets[i]);
+      final assetTypeId = row['asset_type_id'];
+      if (assetTypeId is int) {
+        row['asset_type_details'] = await getAssetType(assetTypeId);
+      }
+      assets[i] = row;
     }
 
-    return result;
+    assets.sort(
+      (a, b) => (b['created_at'] ?? '').toString().compareTo(
+        (a['created_at'] ?? '').toString(),
+      ),
+    );
+
+    return assets
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList(growable: false);
   }
 
   /// Get a specific asset by ID
   Future<Map<String, dynamic>?> getAsset(int id) async {
-    final db = await database;
-    final results = await db.query('assets', where: 'id = ?', whereArgs: [id]);
-
-    if (results.isEmpty) return null;
-
-    final asset = Map<String, dynamic>.from(results.first);
-    final assetTypeId = asset['asset_type_id'] as int;
-
-    // Get asset type details
-    final assetType = await getAssetType(assetTypeId);
-    asset['asset_type_details'] = assetType;
-
-    // Get images
-    final images = await db.query(
-      'asset_images',
-      where: 'asset_id = ?',
-      whereArgs: [id],
-      orderBy: 'created_at ASC',
+    final form = await _findConditionReportFormContainingEntity(
+      listKey: 'assets',
+      entityId: id,
     );
-    asset['images'] = images.map((img) => img['image_path']).toList();
+    if (form == null) return null;
 
-    return asset;
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return null;
+
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final assets = _readJsonList(formData, 'assets');
+    final row = Map<String, dynamic>.from(
+      assets.firstWhere((item) => item['id'] == id),
+    );
+
+    final assetTypeId = row['asset_type_id'];
+    if (assetTypeId is int) {
+      row['asset_type_details'] = await getAssetType(assetTypeId);
+    }
+
+    return row;
   }
 
   /// Delete an asset
-  Future<void> deleteAsset(int id) async {
-    final db = await database;
-    await db.delete('assets', where: 'id = ?', whereArgs: [id]);
+  Future<void> deleteAsset(int id, {int? formId}) async {
+    Map<String, dynamic>? form;
+
+    if (formId != null) {
+      final direct = await getForm(formId);
+      if (direct != null &&
+          (direct['form_type'] ?? '').toString() == kConditionReportFormType) {
+        form = direct;
+      }
+    }
+
+    form ??= await _findConditionReportFormContainingEntity(
+      listKey: 'assets',
+      entityId: id,
+    );
+
+    if (form == null) return;
+
+    final formDataRaw = form['form_data'];
+    if (formDataRaw is! Map) return;
+
+    final formData = Map<String, dynamic>.from(formDataRaw);
+    final assets = _readJsonList(formData, 'assets')
+      ..removeWhere((row) => row['id'] == id);
+
+    formData['assets'] = assets;
+    form['form_data'] = formData;
+    await _persistFormData(form);
   }
 
   /// Check if a form has assets
   Future<bool> formHasAssets(int formId) async {
-    final db = await database;
-    final result = await db.query(
-      'assets',
-      where: 'form_id = ?',
-      whereArgs: [formId],
-      limit: 1,
-    );
-    return result.isNotEmpty;
+    final assets = await getAssets(formId);
+    return assets.isNotEmpty;
   }
 
   // ========== HEAT METER OPERATIONS ==========

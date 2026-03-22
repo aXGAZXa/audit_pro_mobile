@@ -3,20 +3,27 @@ import 'dart:io';
 import 'package:audit_pro_mobile/logging/apm_logger.dart';
 import 'package:audit_pro_mobile/apm/config/api_config.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
+import 'package:audit_pro_mobile/apm/forms/services/form_edit_session_attachment_endpoints.dart';
 import 'package:audit_pro_mobile/apm/services/portal_api_client.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-class HnaEditSessionSnapshotHydrator {
-  HnaEditSessionSnapshotHydrator({
+class FormEditSessionSnapshotHydrator {
+  FormEditSessionSnapshotHydrator({
     DatabaseHelper? db,
     PortalApiClient? apiClient,
+    FormEditSessionAttachmentEndpoints? attachmentEndpoints,
   }) : db = db ?? DatabaseHelper.instance,
        apiClient =
-           apiClient ?? PortalApiClient(baseUrl: ApiConfig.portalBaseUrl);
+           apiClient ?? PortalApiClient(baseUrl: ApiConfig.portalBaseUrl),
+       attachmentEndpoints =
+           attachmentEndpoints ??
+           FormEditSessionAttachmentEndpoints.forHnaAssessments();
 
   final DatabaseHelper db;
   final PortalApiClient apiClient;
+  final FormEditSessionAttachmentEndpoints attachmentEndpoints;
 
   static Map<String, dynamic> _asMap(dynamic value) {
     if (value is Map) return Map<String, dynamic>.from(value);
@@ -120,7 +127,11 @@ class HnaEditSessionSnapshotHydrator {
 
     final appDir = await getApplicationDocumentsDirectory();
     final destDir = Directory(
-      p.join(appDir.path, 'hna_attachments', submissionId.trim()),
+      p.join(
+        appDir.path,
+        attachmentEndpoints.localFolderName,
+        submissionId.trim(),
+      ),
     );
     if (!await destDir.exists()) {
       await destDir.create(recursive: true);
@@ -193,7 +204,7 @@ class HnaEditSessionSnapshotHydrator {
           );
         } else {
           final bytes = await apiClient.getBytes(
-            '/api/hna/assessments/$submissionId/attachments/$attachmentId/content',
+            attachmentEndpoints.contentPath(submissionId, attachmentId),
             bearerToken: token,
           );
           await file.writeAsBytes(bytes, flush: true);
@@ -298,14 +309,14 @@ class HnaEditSessionSnapshotHydrator {
     };
 
     final newFormId = await db.saveForm(
-      formType: 'heat_network_assessment',
+      formType: kHeatNetworkAssessmentFormType,
       status: 'draft',
       formData: draftDoc,
       uuid: stableFormUuid.isEmpty ? null : stableFormUuid,
     );
 
     await db.setCurrentFormId(
-      formType: 'heat_network_assessment',
+      formType: kHeatNetworkAssessmentFormType,
       formId: newFormId,
     );
 

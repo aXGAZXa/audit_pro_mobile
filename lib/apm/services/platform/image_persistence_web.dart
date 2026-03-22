@@ -6,7 +6,7 @@ Future<List<String>> persistPickedImagePathsImpl(
   List<XFile> images, {
   required String prefix,
 }) async {
-  final ctx = HnaWebEditorAttachmentContext.instance;
+  final ctx = FormWebEditorAttachmentContext.instance;
   if (!ctx.isConfigured) {
     return images.map((e) => e.path).toList(growable: false);
   }

@@ -4,32 +4,16 @@ import 'package:http/http.dart' as http;
 
 import '../../../services/portal_api_client.dart';
 
-class HnaWebEditorService {
-  HnaWebEditorService({required this.apiClient});
+class FormWebEditorService {
+  FormWebEditorService({required this.apiClient});
 
   final PortalApiClient apiClient;
 
   static const String ticketHeader = 'X-GTAPP-EDITOR-TICKET';
 
-  Uri _uri(String path) {
-    final trimmedBase = apiClient.baseUrl.trim();
-    if (trimmedBase.isEmpty) {
-      throw PortalApiException(
-        'PORTAL_BASE_URL is not configured. Provide --dart-define=PORTAL_BASE_URL=https://...'
-        ' when running/building the app.',
-      );
-    }
-
-    final base = trimmedBase.endsWith('/')
-        ? trimmedBase.substring(0, trimmedBase.length - 1)
-        : trimmedBase;
-    final normalizedPath = path.startsWith('/') ? path : '/$path';
-    return Uri.parse('$base$normalizedPath');
-  }
-
   Future<Map<String, dynamic>> getSession({required String ticket}) async {
     final json = await apiClient.getJson(
-      '/api/editor/hna/session',
+      '/api/editor/session',
       headers: {ticketHeader: ticket},
     );
 
@@ -45,7 +29,7 @@ class HnaWebEditorService {
 
   Future<Map<String, dynamic>> getSubmission({required String ticket}) async {
     final json = await apiClient.getJson(
-      '/api/editor/hna/submission',
+      '/api/editor/submission',
       headers: {ticketHeader: ticket},
     );
 
@@ -72,7 +56,7 @@ class HnaWebEditorService {
     }
 
     final json = await apiClient.putJson(
-      '/api/editor/hna/submission',
+      '/api/editor/submission',
       headers: {ticketHeader: ticket},
       body: {'payloadJson': payloadJson, 'generatePdf': generatePdf},
     );
@@ -86,7 +70,7 @@ class HnaWebEditorService {
 
   Future<List<String>> getClients({required String ticket}) async {
     final json = await apiClient.getJson(
-      '/api/editor/hna/clients',
+      '/api/editor/clients',
       headers: {ticketHeader: ticket},
     );
 
@@ -114,7 +98,7 @@ class HnaWebEditorService {
     required String attachmentId,
   }) async {
     return apiClient.getBytes(
-      '/api/editor/hna/attachments/$attachmentId/content',
+      '/api/editor/attachments/$attachmentId/content',
       headers: {ticketHeader: ticket},
     );
   }
@@ -127,7 +111,7 @@ class HnaWebEditorService {
     required String contentType,
   }) async {
     final targetJson = await apiClient.postJson(
-      '/api/editor/hna/attachments/$attachmentId/upload-target',
+      '/api/editor/attachments/$attachmentId/upload-target',
       headers: {ticketHeader: ticket},
       body: {
         'fileName': fileName,
@@ -172,7 +156,7 @@ class HnaWebEditorService {
     }
 
     final finalizeJson = await apiClient.postJson(
-      '/api/editor/hna/attachments/$attachmentId/finalize',
+      '/api/editor/attachments/$attachmentId/finalize',
       headers: {ticketHeader: ticket},
       body: {
         'fileName': fileName,

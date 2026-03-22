@@ -10,14 +10,14 @@ import 'hna_web_editor_service.dart';
 /// - Uploads newly picked images (add-only) via editor-ticket endpoints
 /// - Loads attachment bytes using ticket-authenticated requests
 ///
-/// This context is intentionally scoped to the embedded HNA web editor.
-class HnaWebEditorAttachmentContext {
-  HnaWebEditorAttachmentContext._();
+/// This context is shared by the generic APM web editor host.
+class FormWebEditorAttachmentContext {
+  FormWebEditorAttachmentContext._();
 
-  static final HnaWebEditorAttachmentContext instance =
-      HnaWebEditorAttachmentContext._();
+  static final FormWebEditorAttachmentContext instance =
+      FormWebEditorAttachmentContext._();
 
-  HnaWebEditorService? _service;
+  FormWebEditorService? _service;
   String? _ticket;
   String? _submissionId;
 
@@ -37,7 +37,7 @@ class HnaWebEditorAttachmentContext {
       _submissionId!.trim().isNotEmpty;
 
   void configure({
-    required HnaWebEditorService service,
+    required FormWebEditorService service,
     required String ticket,
     required String submissionId,
     List<Map<String, dynamic>>? initialAttachments,

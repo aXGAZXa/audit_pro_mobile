@@ -1,13 +1,11 @@
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:http/http.dart' as http;
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:audit_pro_mobile/apm/config/api_config.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
 import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/services/hna_submission_payload_builder.dart';
-import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/services/hna_edit_sessions_service.dart';
+import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
+import 'package:audit_pro_mobile/apm/forms/services/forms_edit_sessions_service.dart';
+import 'package:audit_pro_mobile/apm/forms/services/form_response_attachment_sync_service.dart';
 import 'package:audit_pro_mobile/logging/apm_logger.dart';
 import 'package:audit_pro_mobile/apm/services/app_info_service.dart';
 import 'package:audit_pro_mobile/apm/services/auth_token_store.dart';
@@ -29,7 +27,9 @@ class HnaSubmissionService {
   final PortalApiClient apiClient;
   final DatabaseHelper db;
 
-  final HnaEditSessionsService _editSessions = HnaEditSessionsService();
+  final FormsEditSessionsService _editSessions = FormsEditSessionsService();
+  late final FormResponseAttachmentSyncService _attachmentSync =
+      FormResponseAttachmentSyncService(apiClient: apiClient);
 
   static const String _submissionSummaryKey = 'submissionSummary';
   static const String _editSessionKey = 'editSession';
@@ -164,7 +164,7 @@ class HnaSubmissionService {
         final submissionId = await _editSessions.submitRevision(
           token: token,
           sessionToken: sessionToken,
-          assessment: payload,
+          formPayload: payload,
           schemaVersion: HnaSubmissionPayloadBuilder.payloadSchemaVersion,
           appVersion: '${appVersion.name}+${appVersion.code}',
         );
@@ -210,11 +210,15 @@ class HnaSubmissionService {
       category: 'HNA/Submit',
     );
 
-    await _uploadAttachments(
-      token: token,
-      submissionId: submissionId,
-      payload: payload,
-    );
+    final attachments = _readAttachments(payload);
+    if (attachments.isNotEmpty) {
+      await _attachmentSync.syncDirectUploads(
+        bearerToken: token,
+        responseId: submissionId,
+        attachments: attachments,
+        endpoints: FormResponseAttachmentEndpoints.forHnaAssessments(),
+      );
+    }
 
     await _recordSubmitSuccess(formId: formId, sentAt: DateTime.now());
     ApmLogger.info(
@@ -243,6 +247,19 @@ class HnaSubmissionService {
     return null;
   }
 
+  List<Map<String, dynamic>> _readAttachments(Map<String, dynamic> payload) {
+    final hna = payload['hna'];
+    if (hna is! Map) return const [];
+
+    final attachments = hna['attachments'];
+    if (attachments is! List) return const [];
+
+    return attachments
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: false);
+  }
+
   String _readCanonicalFormType(Map<String, dynamic> payload) {
     final form = payload['form'];
     if (form is Map) {
@@ -250,7 +267,7 @@ class HnaSubmissionService {
       if (value.isNotEmpty) return value;
     }
 
-    return 'heat_network_assessment';
+    return kHeatNetworkAssessmentFormType;
   }
 
   String? _readSubmissionId(Map<String, dynamic> json) {
@@ -341,368 +358,6 @@ class HnaSubmissionService {
     );
   }
 
-  Future<void> _uploadAttachments({
-    required String token,
-    required String submissionId,
-    required Map<String, dynamic> payload,
-  }) async {
-    final hna = payload['hna'];
-    if (hna is! Map<String, dynamic>) return;
-
-    final attachments = hna['attachments'];
-    if (attachments is! List) return;
-
-    ApmLogger.info(
-      'Attachments pipeline start submissionId=$submissionId total=${attachments.length}',
-      category: 'HNA/Attachments',
-    );
-
-    final manifestEntries = await _buildAttachmentManifestEntries(attachments);
-    if (manifestEntries.isEmpty) {
-      ApmLogger.info(
-        'Attachments pipeline skipped submissionId=$submissionId reason=no_manifest_entries',
-        category: 'HNA/Attachments',
-      );
-      return;
-    }
-
-    final missingIds = await _confirmManifest(
-      token: token,
-      submissionId: submissionId,
-      attachments: manifestEntries,
-    );
-
-    ApmLogger.info(
-      'Manifest confirmed submissionId=$submissionId missing=${missingIds.length} sample=${missingIds.take(5).toList()}',
-      category: 'HNA/Attachments',
-    );
-
-    if (missingIds.isEmpty) return;
-
-    final toUpload = manifestEntries
-        .where((a) => missingIds.contains(a.attachmentId))
-        .toList();
-
-    final uploadTargets = await _requestDirectUploadTargets(
-      token: token,
-      submissionId: submissionId,
-      attachments: toUpload,
-    );
-
-    final targetsById = {
-      for (final target in uploadTargets) target.attachmentId: target,
-    };
-
-    const maxParallel = 3;
-    const maxRetries = 2;
-
-    for (var i = 0; i < toUpload.length; i += maxParallel) {
-      final batch = toUpload.skip(i).take(maxParallel).toList();
-      await Future.wait(
-        batch.map((a) async {
-          final attachmentId = a.attachmentId;
-          final localPath = a.localPath;
-          final contentType = a.contentType;
-
-          final target = targetsById[attachmentId];
-          if (target == null) {
-            throw PortalApiException(
-              'Missing direct upload target for attachment $attachmentId',
-            );
-          }
-
-          if (localPath.trim().isEmpty) return;
-
-          final resolvedPath = await _resolveAttachmentLocalPath(localPath);
-          final f = File(resolvedPath);
-          if (!await f.exists()) {
-            throw PortalApiException(
-              'Missing attachment file: ${resolvedPath.isEmpty ? localPath : resolvedPath}',
-            );
-          }
-
-          final bytes = await f.length();
-          ApmLogger.debug(
-            'Uploading attachment submissionId=$submissionId id=$attachmentId bytes=$bytes contentType=${contentType ?? ""}',
-            category: 'HNA/Attachments',
-          );
-
-          await _uploadWithRetry(
-            attachmentId: attachmentId,
-            file: f,
-            target: target,
-            maxRetries: maxRetries,
-          );
-
-          ApmLogger.info(
-            'Uploaded attachment submissionId=$submissionId id=$attachmentId',
-            category: 'HNA/Attachments',
-          );
-        }),
-      );
-    }
-
-    final finalizeResult = await _finalizeDirectUploads(
-      token: token,
-      submissionId: submissionId,
-      attachments: toUpload,
-    );
-
-    if (finalizeResult.isNotEmpty) {
-      throw PortalApiException(
-        'Finalize failed. Missing attachments after direct upload: ${finalizeResult.join(', ')}',
-      );
-    }
-
-    final remainingMissing = await _confirmManifest(
-      token: token,
-      submissionId: submissionId,
-      attachments: manifestEntries,
-    );
-
-    if (remainingMissing.isNotEmpty) {
-      throw PortalApiException(
-        'Attachment sync incomplete after finalize: ${remainingMissing.join(', ')}',
-      );
-    }
-
-    ApmLogger.info(
-      'Attachments pipeline complete submissionId=$submissionId',
-      category: 'HNA/Attachments',
-    );
-  }
-
-  Future<String> _resolveAttachmentLocalPath(String localPath) async {
-    final trimmed = localPath.trim();
-    if (trimmed.isEmpty) return trimmed;
-
-    // Legacy payloads stored absolute paths.
-    if (p.isAbsolute(trimmed)) return trimmed;
-
-    // URLs / web blob refs should not be treated as local files.
-    if (trimmed.contains('://') || trimmed.startsWith('data:')) return trimmed;
-
-    try {
-      final appDir = await getApplicationDocumentsDirectory();
-      return p.join(appDir.path, trimmed);
-    } catch (_) {
-      // Best-effort fallback.
-      return trimmed;
-    }
-  }
-
-  Future<Set<String>> _confirmManifest({
-    required String token,
-    required String submissionId,
-    required List<_AttachmentManifestEntry> attachments,
-  }) async {
-    final manifest = attachments
-        .map(
-          (a) => <String, dynamic>{
-            'attachmentId': a.attachmentId,
-            'contentType': a.contentType,
-            'fileName': a.fileName,
-            'fileSize': a.fileSize,
-          },
-        )
-        .toList();
-
-    if (manifest.isEmpty) return {};
-
-    final json = await apiClient.postJson(
-      '/api/hna/assessments/$submissionId/attachments/manifest',
-      bearerToken: token,
-      body: {'attachments': manifest},
-    );
-
-    if (!PortalApiClient.readResultSuccess(json)) {
-      throw PortalApiException(
-        PortalApiClient.readResultMessage(json) ??
-            'Attachment manifest confirmation failed',
-      );
-    }
-
-    final data = json['Data'] ?? json['data'];
-    if (data is! Map) return {};
-
-    final missing =
-        data['missingAttachmentIds'] ??
-        data['missingAttachmentIds'.toLowerCase()];
-    if (missing is! List) return {};
-
-    return missing.map((e) => e.toString()).toSet();
-  }
-
-  Future<List<_AttachmentManifestEntry>> _buildAttachmentManifestEntries(
-    List<dynamic> attachments,
-  ) async {
-    final out = <_AttachmentManifestEntry>[];
-    for (final raw in attachments.whereType<Map>()) {
-      final attachmentId = (raw['id'] ?? '').toString().trim();
-      final localPath = (raw['localPath'] ?? '').toString().trim();
-      if (attachmentId.isEmpty || localPath.isEmpty) continue;
-
-      final resolvedPath = await _resolveAttachmentLocalPath(localPath);
-      final file = File(resolvedPath);
-      if (!await file.exists()) {
-        throw PortalApiException(
-          'Missing attachment file: ${resolvedPath.isEmpty ? localPath : resolvedPath}',
-        );
-      }
-
-      out.add(
-        _AttachmentManifestEntry(
-          attachmentId: attachmentId,
-          localPath: localPath,
-          resolvedPath: resolvedPath,
-          fileName: p.basename(resolvedPath),
-          contentType: raw['contentType']?.toString().trim(),
-          fileSize: await file.length(),
-        ),
-      );
-    }
-
-    return out;
-  }
-
-  Future<List<_DirectUploadTarget>> _requestDirectUploadTargets({
-    required String token,
-    required String submissionId,
-    required List<_AttachmentManifestEntry> attachments,
-  }) async {
-    final body = {
-      'attachments': attachments
-          .map(
-            (a) => {
-              'attachmentId': a.attachmentId,
-              'contentType': a.contentType,
-              'fileName': a.fileName,
-              'fileSize': a.fileSize,
-            },
-          )
-          .toList(),
-    };
-
-    final json = await apiClient.postJson(
-      '/api/hna/assessments/$submissionId/attachments/upload-targets',
-      bearerToken: token,
-      body: body,
-    );
-
-    if (!PortalApiClient.readResultSuccess(json)) {
-      throw PortalApiException(
-        PortalApiClient.readResultMessage(json) ??
-            'Failed to get direct upload targets',
-      );
-    }
-
-    final data = json['Data'] ?? json['data'];
-    if (data is! Map) return const [];
-
-    final uploads = data['uploads'];
-    if (uploads is! List) return const [];
-
-    return uploads.whereType<Map>().map((raw) {
-      final map = Map<String, dynamic>.from(raw);
-      final attachmentId = (map['attachmentId'] ?? '').toString().trim();
-      final uploadUrl = (map['uploadUrl'] ?? '').toString().trim();
-      final contentType = (map['contentType'] ?? '').toString().trim();
-      if (attachmentId.isEmpty || uploadUrl.isEmpty) {
-        throw PortalApiException('Malformed direct upload target response');
-      }
-
-      return _DirectUploadTarget(
-        attachmentId: attachmentId,
-        uploadUrl: uploadUrl,
-        contentType: contentType,
-      );
-    }).toList();
-  }
-
-  Future<Set<String>> _finalizeDirectUploads({
-    required String token,
-    required String submissionId,
-    required List<_AttachmentManifestEntry> attachments,
-  }) async {
-    final body = {
-      'attachments': attachments
-          .map(
-            (a) => {
-              'attachmentId': a.attachmentId,
-              'contentType': a.contentType,
-              'fileName': a.fileName,
-              'fileSize': a.fileSize,
-            },
-          )
-          .toList(),
-    };
-
-    final json = await apiClient.postJson(
-      '/api/hna/assessments/$submissionId/attachments/finalize',
-      bearerToken: token,
-      body: body,
-    );
-
-    if (!PortalApiClient.readResultSuccess(json)) {
-      throw PortalApiException(
-        PortalApiClient.readResultMessage(json) ?? 'Attachment finalize failed',
-      );
-    }
-
-    final data = json['Data'] ?? json['data'];
-    if (data is! Map) return {};
-
-    final missing = data['missingAttachmentIds'];
-    if (missing is! List) return {};
-
-    return missing.map((e) => e.toString()).toSet();
-  }
-
-  Future<void> _uploadWithRetry({
-    required String attachmentId,
-    required File file,
-    required _DirectUploadTarget target,
-    required int maxRetries,
-  }) async {
-    var attempt = 0;
-    while (true) {
-      try {
-        await _uploadSingleAttachment(file: file, target: target);
-        return;
-      } catch (e) {
-        ApmLogger.warning(
-          'Upload attempt failed attachmentId=$attachmentId attempt=$attempt error={Error}',
-          args: [e.toString()],
-          category: 'HNA/Attachments',
-          error: e,
-        );
-        if (attempt >= maxRetries) rethrow;
-        final delayMs = 500 * (attempt + 1);
-        await Future.delayed(Duration(milliseconds: delayMs));
-        attempt += 1;
-      }
-    }
-  }
-
-  Future<void> _uploadSingleAttachment({
-    required File file,
-    required _DirectUploadTarget target,
-  }) async {
-    final uri = Uri.parse(target.uploadUrl);
-    final req = http.Request('PUT', uri);
-    req.headers['Content-Type'] = target.contentType;
-    req.bodyBytes = await file.readAsBytes();
-
-    final resp = await apiClient.httpClient.send(req);
-    final body = await resp.stream.bytesToString();
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw PortalApiException(
-        body.isEmpty ? 'Direct attachment upload failed' : body,
-        statusCode: resp.statusCode,
-      );
-    }
-  }
-
   int _countList(Map<String, dynamic> root, List<String> path) {
     dynamic current = root;
     for (final key in path) {
@@ -731,34 +386,4 @@ class HnaSubmissionService {
     }
     return total.toString();
   }
-}
-
-class _AttachmentManifestEntry {
-  const _AttachmentManifestEntry({
-    required this.attachmentId,
-    required this.localPath,
-    required this.resolvedPath,
-    required this.fileName,
-    required this.contentType,
-    required this.fileSize,
-  });
-
-  final String attachmentId;
-  final String localPath;
-  final String resolvedPath;
-  final String fileName;
-  final String? contentType;
-  final int fileSize;
-}
-
-class _DirectUploadTarget {
-  const _DirectUploadTarget({
-    required this.attachmentId,
-    required this.uploadUrl,
-    required this.contentType,
-  });
-
-  final String attachmentId;
-  final String uploadUrl;
-  final String contentType;
 }

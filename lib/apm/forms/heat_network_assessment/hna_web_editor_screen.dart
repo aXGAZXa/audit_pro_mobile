@@ -4,6 +4,11 @@ import 'dart:convert';
 
 import 'package:uuid/uuid.dart';
 
+import '../condition_report/condition_report_definition.dart';
+import '../condition_report/condition_report_screen.dart';
+import '../condition_report/services/cr_submission_payload_builder.dart';
+import '../shared/editor/form_editor_contract.dart';
+import 'heat_network_assessment_definition.dart';
 import '../../services/portal_api_client.dart';
 import 'hna_web_editor_form_screen.dart';
 import 'services/hna_web_editor_attachment_context.dart';
@@ -14,8 +19,8 @@ import 'services/hna_submission_payload_builder.dart';
 import 'services/hna_web_editor_service.dart';
 import 'services/web_editor_return.dart';
 
-class HnaWebEditorScreen extends StatefulWidget {
-  const HnaWebEditorScreen({
+class ApmWebEditorScreen extends StatefulWidget {
+  const ApmWebEditorScreen({
     super.key,
     required this.ticket,
     this.returnUrl,
@@ -27,17 +32,27 @@ class HnaWebEditorScreen extends StatefulWidget {
   final String? mode;
 
   @override
-  State<HnaWebEditorScreen> createState() => _HnaWebEditorScreenState();
+  State<ApmWebEditorScreen> createState() => _ApmWebEditorScreenState();
 }
 
-class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
+class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
+  static const String _buildId = String.fromEnvironment(
+    'APM_WEB_EDITOR_BUILD_ID',
+    defaultValue: 'unknown-build',
+  );
+  static const String _definesSource = String.fromEnvironment(
+    'APM_DEFINES_SOURCE',
+    defaultValue: 'unknown-source',
+  );
+
   bool _loading = true;
   String? _error;
 
   Map<String, dynamic>? _session;
   Map<String, dynamic>? _submission;
+  Map<String, dynamic>? _crOriginalPayload;
 
-  late final HnaWebEditorService _service;
+  late final FormWebEditorService _service;
   String? _returnUrl;
 
   bool get _isAutoResubmit => (widget.mode ?? '').trim() == 'auto-resubmit';
@@ -46,7 +61,7 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
   void initState() {
     super.initState();
     final baseUrl = kIsWeb ? Uri.base.origin : '';
-    _service = HnaWebEditorService(
+    _service = FormWebEditorService(
       apiClient: PortalApiClient(baseUrl: baseUrl),
     );
 
@@ -57,6 +72,15 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
         _returnUrl!,
       );
     }
+
+    _logDiag('init', {
+      'ticket': _ticketPreview(widget.ticket),
+      'buildId': _buildId,
+      'source': _definesSource,
+      'mode': widget.mode ?? '',
+      'returnUrl': _returnUrl ?? '',
+      'origin': kIsWeb ? Uri.base.origin : '',
+    });
 
     _load();
   }
@@ -130,6 +154,72 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
       final session = await _service.getSession(ticket: widget.ticket);
       final submission = await _service.getSubmission(ticket: widget.ticket);
 
+      final ticketFormType = _resolveSessionFormType(session);
+      _logDiag('session-loaded', {
+        'ticket': _ticketPreview(widget.ticket),
+        'formType': ticketFormType,
+        'submissionId':
+            (submission['submissionId'] ?? submission['SubmissionId'] ?? '')
+                .toString(),
+      });
+
+      if (ticketFormType == kConditionReportFormType) {
+        _logDiag('route-condition-report', {
+          'ticket': _ticketPreview(widget.ticket),
+        });
+
+        final payloadJson =
+            (submission['payloadJson'] ?? submission['PayloadJson'] ?? '')
+                .toString()
+                .trim();
+        if (payloadJson.isEmpty) {
+          throw PortalApiException('Submission payload is empty.');
+        }
+
+        final decoded = jsonDecode(payloadJson);
+        if (decoded is! Map) {
+          throw PortalApiException('Submission payload is not a JSON object.');
+        }
+
+        _crOriginalPayload = Map<String, dynamic>.from(decoded);
+
+        final payload = Map<String, dynamic>.from(decoded);
+        final conditionReportRaw = payload['conditionReport'];
+        if (conditionReportRaw is! Map) {
+          final formType = _resolveSessionFormType(_session ?? const {});
+          throw PortalApiException(
+            _withDiag(
+              'Condition report payload is missing. formType="$formType" payloadKeys=${payload.keys.join(',')}',
+            ),
+          );
+        }
+
+        final formData = Map<String, dynamic>.from(conditionReportRaw);
+
+        if (!mounted) return;
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            settings: const RouteSettings(name: '/cr-web-editor'),
+            builder: (_) => ConditionReportScreen(
+              mode: FormEditorRuntimeMode.webEditor,
+              initialFormData: formData,
+              onCompleteForm: _completeConditionReportWebEditor,
+            ),
+          ),
+        );
+        return;
+      }
+
+      if (ticketFormType.isNotEmpty &&
+          ticketFormType != kHeatNetworkAssessmentFormType) {
+        throw PortalApiException(
+          'Unsupported editor form type "$ticketFormType".',
+        );
+      }
+
+      _logDiag('route-hna', {'ticket': _ticketPreview(widget.ticket)});
+
       final clients = _isAutoResubmit
           ? const <String>[]
           : await _service.getClients(ticket: widget.ticket);
@@ -172,7 +262,7 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
         }
       }
 
-      HnaWebEditorAttachmentContext.instance.configure(
+      FormWebEditorAttachmentContext.instance.configure(
         service: _service,
         ticket: widget.ticket,
         submissionId: submissionId,
@@ -225,18 +315,71 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
       );
     } catch (e) {
       if (!mounted) return;
+      final diagError = _withDiag(e.toString());
       setState(() {
-        _error = e.toString();
+        _error = diagError;
         _loading = false;
+      });
+
+      _logDiag('load-error', {
+        'ticket': _ticketPreview(widget.ticket),
+        'error': e.toString(),
       });
 
       if (kIsWeb && _isAutoResubmit) {
         WebEditorReturn.notifyParentError(
           ticket: widget.ticket,
-          message: e.toString(),
+          message: diagError,
         );
       }
     }
+  }
+
+  Future<void> _completeConditionReportWebEditor(
+    FormEditorCompletion completion,
+  ) async {
+    final payload = CrSubmissionPayloadBuilder.buildFromFormSnapshot(
+      formSnapshot: completion.formData,
+      originalPayload: _crOriginalPayload,
+      formId: completion.localFormId,
+      formUuid: completion.formUuid,
+      submittedAt: DateTime.now().toUtc(),
+    );
+
+    await _service.updateSubmission(
+      ticket: widget.ticket,
+      payloadJson: jsonEncode(payload),
+      generatePdf: false,
+    );
+
+    if (kIsWeb) {
+      WebEditorReturn.notifyParentComplete(
+        ticket: widget.ticket,
+        returnUrl: _returnUrl,
+      );
+
+      if (_returnUrl != null && _returnUrl!.isNotEmpty) {
+        WebEditorReturn.returnToCaller(
+          _returnUrl!,
+          ticket: widget.ticket,
+          preferClose: false,
+        );
+      }
+    }
+  }
+
+  String _resolveSessionFormType(Map<String, dynamic> session) {
+    final raw =
+        (session['formType'] ??
+                session['FormType'] ??
+                session['ticketFormType'] ??
+                session['TicketFormType'] ??
+                '')
+            .toString()
+            .trim()
+            .toLowerCase();
+
+    return raw;
   }
 
   Future<void> _runAutoResubmit({
@@ -278,19 +421,48 @@ class _HnaWebEditorScreenState extends State<HnaWebEditorScreen> {
         _error = null;
       });
     } catch (e) {
+      final diagError = _withDiag(e.toString());
       if (kIsWeb) {
         WebEditorReturn.notifyParentError(
           ticket: widget.ticket,
-          message: e.toString(),
+          message: diagError,
         );
       }
 
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = diagError;
         _loading = false;
       });
+
+      _logDiag('auto-resubmit-error', {
+        'ticket': _ticketPreview(widget.ticket),
+        'error': e.toString(),
+      });
     }
+  }
+
+  String _withDiag(String message) {
+    return '[diag build=$_buildId source=$_definesSource ticket=${_ticketPreview(widget.ticket)}] $message';
+  }
+
+  String _ticketPreview(String ticket) {
+    final t = ticket.trim();
+    if (t.length <= 8) return t;
+    return '${t.substring(0, 8)}...';
+  }
+
+  void _logDiag(String event, Map<String, Object?> fields) {
+    if (!kDebugMode && !kIsWeb) {
+      return;
+    }
+
+    final details = fields.entries
+        .map((entry) => '${entry.key}=${entry.value}')
+        .join(' ');
+    debugPrint(
+      '[APM_WEB_EDITOR] $event build=$_buildId source=$_definesSource $details',
+    );
   }
 
   dynamic _makeJsonEncodable(dynamic value) {

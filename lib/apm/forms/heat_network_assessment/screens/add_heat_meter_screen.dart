@@ -6,6 +6,7 @@ import '../../../database/database_helper.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
+import '../heat_network_assessment_definition.dart';
 import 'hna_observations_list_screen.dart';
 import 'package:uuid/uuid.dart';
 import '../../../services/platform/image_persistence.dart';
@@ -405,7 +406,7 @@ class _AddHeatMeterScreenState extends State<AddHeatMeterScreen> {
       draftDoc['assets'] = assets;
 
       final status = (form['status'] ?? 'draft').toString();
-      final formType = (form['form_type'] ?? 'heat_network_assessment')
+      final formType = (form['form_type'] ?? kHeatNetworkAssessmentFormType)
           .toString();
       final uuid = (form['uuid'] ?? '').toString();
 
