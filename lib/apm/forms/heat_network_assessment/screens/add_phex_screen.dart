@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'hna_observations_list_screen.dart';
 import 'package:uuid/uuid.dart';
 import 'add_heat_meter_screen.dart';
@@ -393,9 +394,7 @@ class _AddPhexScreenState extends State<AddPhexScreen> {
       return true;
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error saving PHEX: $e')));
+        ApmFeedback.error(context, 'Error saving PHEX: $e');
       }
       return false;
     } finally {

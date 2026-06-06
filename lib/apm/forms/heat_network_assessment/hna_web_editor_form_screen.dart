@@ -20,6 +20,7 @@ import 'services/hna_web_editor_attachment_context.dart';
 import 'services/hna_web_editor_service.dart';
 import 'services/web_editor_return.dart';
 import 'hna_web_editor_complete_screen.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 
 import 'package:uuid/uuid.dart';
 
@@ -270,17 +271,13 @@ class _HnaWebEditorFormScreenState extends State<HnaWebEditorFormScreen> {
       });
 
       if (showSuccessToast) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Saved')));
+        ApmFeedback.success(context, 'Saved');
       }
 
       return true;
     } catch (e) {
       if (!mounted) return false;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      ApmFeedback.error(context, 'Save failed: $e');
       return false;
     } finally {
       if (mounted) setState(() => _saving = false);

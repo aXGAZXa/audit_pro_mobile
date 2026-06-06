@@ -197,6 +197,25 @@ class CrSubmissionPayloadBuilder {
     if (trimmed.isEmpty) return false;
 
     final lower = trimmed.toLowerCase();
+    if (lower.startsWith('att_')) return false;
+
+    final looksLikeImagePath =
+        lower.endsWith('.png') ||
+        lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.heic');
+
+    final hasPathLikePrefix =
+        lower.startsWith('/data/user/') ||
+        lower.startsWith('file:///') ||
+        lower.contains('/') ||
+        lower.contains('\\');
+
+    if (looksLikeImagePath && hasPathLikePrefix) {
+      return true;
+    }
+
     final key = keyHint.toLowerCase();
     final keyLooksLikeFileRef =
         key.contains('image') ||
@@ -213,12 +232,7 @@ class CrSubmissionPayloadBuilder {
       return false;
     }
 
-    return lower.endsWith('.png') ||
-        lower.endsWith('.jpg') ||
-        lower.endsWith('.jpeg') ||
-        lower.endsWith('.webp') ||
-        lower.endsWith('.heic') ||
-        lower.startsWith('/data/user/');
+    return looksLikeImagePath || lower.startsWith('/data/user/');
   }
 
   static void _rewriteAttachmentRefsInPlace(

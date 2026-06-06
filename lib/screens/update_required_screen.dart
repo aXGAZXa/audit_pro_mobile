@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 
 import '../apm/models/update_check_result.dart';
 import '../apm/services/apk_download_service.dart';
@@ -49,13 +50,9 @@ class _UpdateRequiredScreenState extends State<UpdateRequiredScreen> {
   Future<void> _downloadAndInstall(BuildContext context) async {
     if (_isDownloading) return;
 
-    final messenger = ScaffoldMessenger.of(context);
-
     final downloadUrl = widget.checkResult.downloadUrl;
     if (downloadUrl == null || downloadUrl.trim().isEmpty) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('No download link available yet.')),
-      );
+      ApmFeedback.warning(context, 'No download link available yet.');
       return;
     }
 
@@ -83,9 +80,7 @@ class _UpdateRequiredScreenState extends State<UpdateRequiredScreen> {
 
       final file = File(result.localPath);
       if (!await file.exists()) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Download failed: file not found.')),
-        );
+        ApmFeedback.error(context, 'Download failed: file not found.');
         return;
       }
 
@@ -103,23 +98,18 @@ class _UpdateRequiredScreenState extends State<UpdateRequiredScreen> {
 
         if (!mounted) return;
         if (openResult.type != ResultType.done) {
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text(
-                'Unable to start installer: ${e.message ?? e.code}',
-              ),
-            ),
+          ApmFeedback.error(
+            context,
+            'Unable to start installer: ${e.message ?? e.code}',
           );
         }
       } catch (e) {
         if (!mounted) return;
-        messenger.showSnackBar(
-          SnackBar(content: Text('Unable to start installer: $e')),
-        );
+        ApmFeedback.error(context, 'Unable to start installer: $e');
       }
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text('Download failed: $e')));
+      ApmFeedback.error(context, 'Download failed: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -134,7 +124,6 @@ class _UpdateRequiredScreenState extends State<UpdateRequiredScreen> {
     setState(() => _isChecking = true);
 
     final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
 
     try {
       final result = await widget.onRecheck();
@@ -145,14 +134,10 @@ class _UpdateRequiredScreenState extends State<UpdateRequiredScreen> {
         return;
       }
 
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Update still required.')),
-      );
+      ApmFeedback.warning(context, 'Update still required.');
     } catch (_) {
       if (!mounted) return;
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Recheck failed. Try again later.')),
-      );
+      ApmFeedback.error(context, 'Recheck failed. Try again later.');
     } finally {
       if (mounted) {
         setState(() => _isChecking = false);

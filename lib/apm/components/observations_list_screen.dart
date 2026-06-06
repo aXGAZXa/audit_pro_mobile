@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
 import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:uuid/uuid.dart';
 
 class ObservationsListScreen extends StatefulWidget {
@@ -145,9 +146,7 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading observations: $e')),
-        );
+        ApmFeedback.error(context, 'Error loading observations: $e');
       }
     } finally {
       if (mounted) {
@@ -348,12 +347,7 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error saving observation: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        ApmFeedback.error(context, 'Error saving observation: $e');
       }
     }
   }
@@ -444,12 +438,7 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error deleting observation: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          ApmFeedback.error(context, 'Error deleting observation: $e');
         }
       }
     }

@@ -2,6 +2,7 @@
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:image_picker/image_picker.dart';
 
 class AddPlantRoomScreen extends StatefulWidget {
@@ -14,6 +15,7 @@ class AddPlantRoomScreen extends StatefulWidget {
 class _AddPlantRoomScreenState extends State<AddPlantRoomScreen> {
   final _formKey = GlobalKey<FormState>();
   final _locationController = TextEditingController();
+  bool _didInitFromArgs = false;
 
   int? _formId;
   Map<String, dynamic>? _existingPlantRoom;
@@ -28,8 +30,13 @@ class _AddPlantRoomScreenState extends State<AddPlantRoomScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
 
+    if (_didInitFromArgs) {
+      return;
+    }
+
     final args =
         ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+    _didInitFromArgs = true;
     if (args != null) {
       _formId = args['formId'] as int?;
       _existingPlantRoom = args['plantRoom'] as Map<String, dynamic>?;
@@ -148,9 +155,7 @@ class _AddPlantRoomScreenState extends State<AddPlantRoomScreen> {
   Future<void> _savePlantRoom() async {
     if (_formId == null) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Form ID is required')));
+        ApmFeedback.error(context, 'Form ID is required');
       }
       return;
     }

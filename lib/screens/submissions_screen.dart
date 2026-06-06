@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app/app_scaffold.dart';
 import '../auth/auth_session.dart';
+import '../logging/apm_feedback.dart';
 import '../logging/apm_logger.dart';
 import '../apm/forms/condition_report/condition_report_definition.dart';
 import '../apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
@@ -88,9 +89,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
     final token = widget.session.state.value?.token;
     if (token == null || token.trim().isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('You must be signed in.')));
+        ApmFeedback.warning(context, 'You must be signed in.');
       }
       return;
     }
@@ -126,9 +125,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
           'No pending edit requests returned',
           category: 'APM/EditRequests',
         );
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No edit requests found.')),
-        );
+        ApmFeedback.info(context, 'No edit requests found.');
         return;
       }
 
@@ -216,9 +213,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
         stackTrace: st,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toString())));
+      ApmFeedback.error(context, e.toString());
     } finally {
       if (mounted) {
         setState(() {
@@ -278,9 +273,7 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
         stackTrace: st,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toString())));
+      ApmFeedback.error(context, e.toString());
     } finally {
       if (mounted) {
         setState(() {

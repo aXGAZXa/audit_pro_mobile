@@ -1,5 +1,4 @@
-﻿import 'dart:io';
-import 'dart:developer' as developer;
+﻿import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/components/entity_card.dart';
@@ -167,8 +166,8 @@ class _UnsafeSituationsScreenState extends State<UnsafeSituationsScreen> {
                   children: images.map((imgPath) {
                     return ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.file(
-                        File(imgPath.toString()),
+                      child: AppResolvedImage(
+                        imagePath: imgPath.toString(),
                         width: 100,
                         height: 100,
                         fit: BoxFit.cover,

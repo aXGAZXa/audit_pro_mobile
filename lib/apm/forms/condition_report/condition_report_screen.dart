@@ -2,6 +2,10 @@
 import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/condition_report/services/cr_submission_service.dart';
+import 'package:audit_pro_mobile/apm/services/app_info_service.dart';
+import 'package:audit_pro_mobile/apm/services/auth_token_store.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:image_picker/image_picker.dart';
 import 'screens/site_details_screen.dart';
 import 'screens/gas_meter_screen.dart';
@@ -41,6 +45,10 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
   final DatabaseHelper _db = DatabaseHelper.instance;
   final FormDraftPersistenceService _draftPersistence =
       FormDraftPersistenceService();
+  final CrSubmissionService _submissionService = CrSubmissionService(
+    tokenStore: AuthTokenStore(),
+    appInfoService: AppInfoService(),
+  );
 
   bool get _isWebEditorMode => widget.mode == FormEditorRuntimeMode.webEditor;
 
@@ -57,15 +65,8 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
   @override
   void initState() {
     super.initState();
-    _loadOrCreateForm();
-  }
-
-  /// Load existing draft form or create a new one
-  Future<void> _loadOrCreateForm() async {
-    setState(() => _isLoading = true);
-
-    try {
-      if (_isWebEditorMode) {
+    if (_isWebEditorMode) {
+      try {
         _formId = null;
         _formData
           ..clear()
@@ -76,9 +77,22 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
                 as Map<String, dynamic>,
           );
         _refreshObservationFlagsFromFormData();
-        return;
+      } catch (e) {
+        developer.log('Error initializing CR web editor mode: $e');
+      } finally {
+        _isLoading = false;
       }
+      return;
+    }
 
+    _loadOrCreateForm();
+  }
+
+  /// Load existing draft form or create a new one
+  Future<void> _loadOrCreateForm() async {
+    setState(() => _isLoading = true);
+
+    try {
       // If a specific form ID was provided, load that form
       final session = await _draftPersistence.loadOrCreate(
         formType: kConditionReportFormType,
@@ -99,9 +113,7 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
     } catch (e) {
       developer.log('Error in _loadOrCreateForm: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error loading form: $e')));
+        ApmFeedback.error(context, 'Error loading form: $e');
       }
     } finally {
       if (mounted) {
@@ -307,17 +319,13 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
     } catch (e) {
       developer.log('Error saving form: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error saving form: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        ApmFeedback.error(context, 'Error saving form: $e');
       }
     }
   }
 
-  /// Complete the form and mark as pending
+  /// Complete the form and attempt immediate submit.
+  /// On failure, keep as pending in My Forms for manual retry.
   Future<void> _completeForm() async {
     if (!_isWebEditorMode && _formId == null) return;
 
@@ -331,6 +339,9 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
         // Preserve DB-managed entity collections during completion save too.
         final currentForm = await _db.getForm(_formId!);
         dataToSave = _buildMergedFormDataForSave(currentForm);
+
+        // Once completed, no longer treat this as the active in-progress draft.
+        await _draftPersistence.clearCurrentDraft(kConditionReportFormType);
 
         await _draftPersistence.flush(
           formType: kConditionReportFormType,
@@ -360,19 +371,32 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
         return;
       }
 
+      if (_isWebEditorMode) {
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+        return;
+      }
+
+      try {
+        await _submissionService.submitForm(formId: _formId!);
+        if (!mounted) return;
+        ApmFeedback.success(context, 'Form submitted.');
+      } catch (e) {
+        if (!mounted) return;
+        ApmFeedback.error(
+          context,
+          'Upload failed. Saved to My Forms for retry.\n$e',
+        );
+      }
+
       if (mounted) {
-        // Return to home screen
         Navigator.of(context).pop();
       }
     } catch (e) {
       developer.log('Error completing form: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error completing form: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        ApmFeedback.error(context, 'Error completing form: $e');
       }
     }
   }
@@ -569,6 +593,7 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
             onDataChanged: _updateFormData,
             onNext: _nextPage,
             formId: _formId,
+            isWebEditorMode: _isWebEditorMode,
             onObservationsChanged: _loadObservations,
             hasObservations: _hasObservations,
           ),

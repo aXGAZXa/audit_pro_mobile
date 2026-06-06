@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:uuid/uuid.dart';
 import '../../../services/platform/image_persistence.dart';
 
@@ -258,32 +259,24 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
     if (assets == null || onAssetsChanged == null) return false;
 
     if (_selectedType == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a plant type')),
-      );
+      ApmFeedback.warning(context, 'Please select a plant type');
       return false;
     }
 
     if (_selectedType == 'DHW heater') {
       if (_selectedFuel == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please select a fuel source')),
-        );
+        ApmFeedback.warning(context, 'Please select a fuel source');
         return false;
       }
       if (_selectedFuel == 'Other' &&
           _otherFuelController.text.trim().isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please specify fuel source')),
-        );
+        ApmFeedback.warning(context, 'Please specify fuel source');
         return false;
       }
     }
 
     if (_operational == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please indicate if visibly operational')),
-      );
+      ApmFeedback.warning(context, 'Please indicate if visibly operational');
       return false;
     }
 
@@ -384,9 +377,7 @@ class _AddDhwPlantScreenState extends State<AddDhwPlantScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error saving DHW plant: $e')));
+        ApmFeedback.error(context, 'Error saving DHW plant: $e');
       }
       return false;
     }

@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 
 import 'package:signature/signature.dart';
 
@@ -28,6 +29,7 @@ class AppResolvedImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final path = imagePath.trim();
+    final normalizedPath = path.replaceAll('\\', '/');
     if (path.isEmpty) {
       return _placeholder();
     }
@@ -42,40 +44,72 @@ class AppResolvedImage extends StatelessWidget {
       );
     }
 
+    final webResolvedUrl = _resolveWebUrl(normalizedPath);
+
+    return FutureBuilder<Uint8List?>(
+      future: FormWebEditorAttachmentContext.instance.loadBytesForLocalPath(
+        normalizedPath,
+      ),
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes != null) {
+          return Image.memory(
+            bytes,
+            width: width,
+            height: height,
+            fit: fit,
+            gaplessPlayback: true,
+            errorBuilder: (context, error, stackTrace) => _placeholder(),
+          );
+        }
+
+        if (webResolvedUrl != null &&
+            snapshot.connectionState != ConnectionState.waiting) {
+          return Image.network(
+            webResolvedUrl,
+            width: width,
+            height: height,
+            fit: fit,
+            errorBuilder: (context, error, stackTrace) => _placeholder(),
+          );
+        }
+
+        return _placeholder(
+          isLoading: snapshot.connectionState == ConnectionState.waiting,
+        );
+      },
+    );
+  }
+
+  String? _resolveWebUrl(String path) {
+    if (path.isEmpty) return null;
+
+    // Device-local paths from mobile payloads are not web-reachable.
+    if (path.startsWith('/data/') ||
+        path.startsWith('file:///') ||
+        path.startsWith('content://')) {
+      return null;
+    }
+
     if (path.startsWith('http://') ||
         path.startsWith('https://') ||
         path.startsWith('data:') ||
         path.startsWith('blob:')) {
-      return Image.network(
-        path,
-        width: width,
-        height: height,
-        fit: fit,
-        errorBuilder: (context, error, stackTrace) => _placeholder(),
-      );
+      return path;
     }
 
-    return FutureBuilder<Uint8List?>(
-      future: FormWebEditorAttachmentContext.instance.loadBytesForLocalPath(
-        path,
-      ),
-      builder: (context, snapshot) {
-        final bytes = snapshot.data;
-        if (bytes == null) {
-          return _placeholder(
-            isLoading: snapshot.connectionState == ConnectionState.waiting,
-          );
-        }
-        return Image.memory(
-          bytes,
-          width: width,
-          height: height,
-          fit: fit,
-          gaplessPlayback: true,
-          errorBuilder: (context, error, stackTrace) => _placeholder(),
-        );
-      },
-    );
+    if (path.startsWith('/')) {
+      return Uri.base.resolve(path).toString();
+    }
+
+    // Treat URL-like relative paths as web assets/API paths.
+    if (path.contains('/') &&
+        !path.startsWith('./') &&
+        !path.startsWith('../')) {
+      return Uri.base.resolve(path).toString();
+    }
+
+    return null;
   }
 
   Widget _placeholder({bool isLoading = false}) {
@@ -397,9 +431,7 @@ class _AppImageCaptureState extends State<AppImageCapture> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error capturing image: $e')));
+        ApmFeedback.error(context, 'Error capturing image: $e');
       }
     }
   }
@@ -420,9 +452,7 @@ class _AppImageCaptureState extends State<AppImageCapture> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error picking image: $e')));
+        ApmFeedback.error(context, 'Error picking image: $e');
       }
     }
   }
@@ -707,20 +737,14 @@ class AppSignatureCapture extends StatelessWidget {
           ElevatedButton(
             onPressed: () async {
               if (kIsWeb) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Signature capture is not supported here.'),
-                  ),
+                ApmFeedback.warning(
+                  context,
+                  'Signature capture is not supported here.',
                 );
                 return;
               }
               if (controller.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Please add a signature'),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
+                ApmFeedback.warning(context, 'Please add a signature');
                 return;
               }
 
@@ -885,9 +909,7 @@ class AppQuestionBlock extends StatefulWidget {
 class _AppQuestionBlockState extends State<AppQuestionBlock> {
   Future<void> _viewObservations(BuildContext context) async {
     if (widget.formId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please save the form first')),
-      );
+      ApmFeedback.warning(context, 'Please save the form first');
       return;
     }
 
@@ -1041,9 +1063,7 @@ class _AppMultiImageCaptureState extends State<AppMultiImageCapture> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error capturing image: $e')));
+        ApmFeedback.error(context, 'Error capturing image: $e');
       }
     }
   }
@@ -1106,9 +1126,7 @@ class _AppMultiImageCaptureState extends State<AppMultiImageCapture> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error picking images: $e')));
+        ApmFeedback.error(context, 'Error picking images: $e');
       }
     }
   }
@@ -1278,9 +1296,7 @@ class AppMediaBlock extends StatefulWidget {
 class _AppMediaBlockState extends State<AppMediaBlock> {
   Future<void> _viewObservations(BuildContext context) async {
     if (widget.formId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please save the form first')),
-      );
+      ApmFeedback.warning(context, 'Please save the form first');
       return;
     }
 

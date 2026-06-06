@@ -4,6 +4,7 @@ import 'package:audit_pro_mobile/apm/database/database_helper.dart';
 import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/services/hna_reference_data_service.dart';
 import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/services/hna_submission_service.dart';
 import 'package:audit_pro_mobile/logging/apm_logger.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:audit_pro_mobile/apm/services/app_info_service.dart';
 import 'package:audit_pro_mobile/apm/services/auth_token_store.dart';
 import 'package:audit_pro_mobile/apm/services/portal_api_client.dart';
@@ -588,9 +589,7 @@ class _HeatNetworkAssessmentScreenState
         category: 'HNA/Submit',
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Form submitted.')));
+        ApmFeedback.success(context, 'Form submitted.');
       Navigator.of(context).pop();
     } catch (e, st) {
       ApmLogger.warning(
@@ -601,11 +600,10 @@ class _HeatNetworkAssessmentScreenState
         stackTrace: st,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Upload failed. Saved to My Forms for retry.\n$e'),
-        ),
-      );
+        ApmFeedback.error(
+          context,
+          'Upload failed. Saved to My Forms for retry.\n$e',
+        );
       Navigator.of(context).pop();
     }
   }

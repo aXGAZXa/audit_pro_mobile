@@ -12,7 +12,7 @@ class AppConfig {
   );
 
   static const String _defaultLivePortalBaseUrl =
-      'https://admin-portal.audit-pro.co.uk';
+      'https://portal.audit-pro.co.uk';
 
   static const String _mobileAuthApiKey = String.fromEnvironment(
     'APM_MOBILE_AUTH_API_KEY',

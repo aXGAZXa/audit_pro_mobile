@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
@@ -487,9 +488,7 @@ class _AddHeatGeneratorScreenState extends State<AddHeatGeneratorScreen> {
     } catch (e) {
       if (!mounted) return false;
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error saving generator: $e')));
+          ApmFeedback.error(context, 'Error saving generator: $e');
       return false;
     }
   }

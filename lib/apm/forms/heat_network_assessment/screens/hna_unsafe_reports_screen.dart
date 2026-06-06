@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 
 import '../../../components/entity_card.dart';
 import '../../../components/form_widgets.dart';
@@ -231,9 +232,7 @@ class _HnaUnsafeReportsScreenState extends State<HnaUnsafeReportsScreen> {
     );
 
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Report deleted')));
+    ApmFeedback.success(context, 'Report deleted');
   }
 
   ({List<Map<String, dynamic>> safe, List<Map<String, dynamic>> unreported})

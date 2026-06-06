@@ -10,6 +10,7 @@ class SiteDetailsScreen extends StatefulWidget {
   final VoidCallback? onObservationsChanged;
   final bool Function(String)? hasObservations;
   final bool hidePropertyType;
+  final bool isWebEditorMode;
 
   const SiteDetailsScreen({
     super.key,
@@ -20,6 +21,7 @@ class SiteDetailsScreen extends StatefulWidget {
     this.onObservationsChanged,
     this.hasObservations,
     this.hidePropertyType = false,
+    this.isWebEditorMode = false,
   });
 
   @override
@@ -48,7 +50,11 @@ class _SiteDetailsScreenState extends State<SiteDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    _loadCollections();
+    if (widget.isWebEditorMode) {
+      _initializeWebEditorCollections();
+    } else {
+      _loadCollections();
+    }
     // Load existing form data if any
     _uprpnEnabled = widget.formData['uprpnEnabled'] ?? false;
     _uprpnController.text = widget.formData['uprpn'] ?? '';
@@ -63,18 +69,45 @@ class _SiteDetailsScreenState extends State<SiteDetailsScreen> {
         widget.formData['propertyTypeOther'] ?? '';
   }
 
-  Future<void> _loadCollections() async {
-    final db = DatabaseHelper.instance;
-    final clientsData = await db.getClients();
-    final propertyTypesData = await db.getPropertyTypes();
+  void _initializeWebEditorCollections() {
+    final selectedClient = (widget.formData['client'] ?? '').toString().trim();
+    final selectedPropertyType = (widget.formData['propertyType'] ?? '')
+        .toString()
+        .trim();
 
-    setState(() {
-      _clients = clientsData.map((c) => c['name'] as String).toList();
-      _propertyTypes = propertyTypesData
-          .map((p) => p['name'] as String)
-          .toList();
-      _isLoadingData = false;
-    });
+    final clients = <String>[];
+    if (selectedClient.isNotEmpty) clients.add(selectedClient);
+
+    final propertyTypes = <String>[];
+    if (selectedPropertyType.isNotEmpty)
+      propertyTypes.add(selectedPropertyType);
+    if (!propertyTypes.contains('Other')) propertyTypes.add('Other');
+
+    _clients = clients;
+    _propertyTypes = propertyTypes;
+    _isLoadingData = false;
+  }
+
+  Future<void> _loadCollections() async {
+    try {
+      final db = DatabaseHelper.instance;
+      final clientsData = await db.getClients();
+      final propertyTypesData = await db.getPropertyTypes();
+
+      if (!mounted) return;
+      setState(() {
+        _clients = clientsData.map((c) => c['name'] as String).toList();
+        _propertyTypes = propertyTypesData
+            .map((p) => p['name'] as String)
+            .toList();
+        _isLoadingData = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingData = false;
+      });
+    }
   }
 
   String _toCamelCase(String text) {

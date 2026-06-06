@@ -24,6 +24,7 @@ class FormWebEditorAttachmentContext {
   final Map<String, String> _localPathToAttachmentId = {};
   final Map<String, Map<String, dynamic>> _attachmentMetadataById = {};
   final Map<String, Uint8List> _bytesCache = {};
+  final Set<String> _missingLocalPaths = {};
   final List<Map<String, dynamic>> _pendingAttachments = [];
 
   int _nextNumericAttachmentId = 1;
@@ -32,9 +33,7 @@ class FormWebEditorAttachmentContext {
       kIsWeb &&
       _service != null &&
       _ticket != null &&
-      _ticket!.trim().isNotEmpty &&
-      _submissionId != null &&
-      _submissionId!.trim().isNotEmpty;
+      _ticket!.trim().isNotEmpty;
 
   void configure({
     required FormWebEditorService service,
@@ -48,6 +47,7 @@ class FormWebEditorAttachmentContext {
     _localPathToAttachmentId.clear();
     _attachmentMetadataById.clear();
     _bytesCache.clear();
+    _missingLocalPaths.clear();
     _pendingAttachments.clear();
 
     var maxNumeric = 0;
@@ -82,9 +82,11 @@ class FormWebEditorAttachmentContext {
     final key = localPath.trim();
     if (key.isEmpty) return false;
     if (_localPathToAttachmentId.containsKey(key)) return true;
-    final base = p.basename(key);
+    final base = _extractBaseName(key);
     if (base.isEmpty) return false;
-    return _localPathToAttachmentId.keys.any((k) => p.basename(k) == base);
+    return _localPathToAttachmentId.keys.any(
+      (k) => _extractBaseName(k) == base,
+    );
   }
 
   String? resolveAttachmentIdForLocalPath(String localPath) {
@@ -95,19 +97,88 @@ class FormWebEditorAttachmentContext {
 
     // Back-compat: payloads may contain full device paths but some callers
     // normalize to basenames.
-    final base = p.basename(key);
+    final base = _extractBaseName(key);
     if (base.isEmpty) return null;
 
     String? match;
     for (final entry in _localPathToAttachmentId.entries) {
-      if (p.basename(entry.key) != base) continue;
+      if (_extractBaseName(entry.key) != base) continue;
       if (match != null && match != entry.value) {
         // Ambiguous basename.
         return null;
       }
       match = entry.value;
     }
-    return match;
+    if (match != null && match!.trim().isNotEmpty) {
+      return match;
+    }
+
+    // Legacy compatibility: some older payloads reference filename-style
+    // local paths without an attachments manifest mapping.
+    final inferred = _inferAttachmentIdFromPath(base);
+    if (inferred != null) return inferred;
+
+    return null;
+  }
+
+  String? _inferAttachmentIdFromPath(String pathOrBaseName) {
+    final base = _extractBaseName(pathOrBaseName);
+    if (base.isEmpty) return null;
+
+    final full = base.trim();
+    if (RegExp(r'^att_\d+\.[a-z0-9]+$').hasMatch(full)) {
+      return full;
+    }
+
+    final withoutExt = p.basenameWithoutExtension(base);
+    final candidate = withoutExt.trim();
+    if (candidate.isEmpty) return null;
+
+    if (RegExp(r'^att_\d+$').hasMatch(candidate)) {
+      return candidate;
+    }
+
+    return null;
+  }
+
+  String _extractBaseName(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return '';
+
+    final uri = Uri.tryParse(trimmed);
+    if (uri != null && (uri.hasScheme || uri.path.isNotEmpty)) {
+      final path = uri.path.isNotEmpty ? uri.path : trimmed;
+      final rawBase = p.basename(path);
+      if (rawBase.isNotEmpty) {
+        return Uri.decodeComponent(rawBase).trim();
+      }
+    }
+
+    final withoutQuery = trimmed.split('?').first.split('#').first;
+    return p.basename(withoutQuery).trim();
+  }
+
+  List<String> _candidateAttachmentIdsForPath(String localPath) {
+    final out = <String>[];
+    final seen = <String>{};
+
+    void add(String? value) {
+      final v = (value ?? '').trim();
+      if (v.isEmpty) return;
+      if (seen.add(v)) out.add(v);
+    }
+
+    final resolved = resolveAttachmentIdForLocalPath(localPath);
+    add(resolved);
+
+    final base = _extractBaseName(localPath);
+    add(base);
+    add(p.basenameWithoutExtension(base));
+
+    final inferred = _inferAttachmentIdFromPath(base);
+    add(inferred);
+
+    return out;
   }
 
   Future<Uint8List?> loadBytesForLocalPath(String localPath) async {
@@ -116,19 +187,31 @@ class FormWebEditorAttachmentContext {
     final key = localPath.trim();
     if (key.isEmpty) return null;
 
+    if (_missingLocalPaths.contains(key)) return null;
+
     final cached = _bytesCache[key];
     if (cached != null) return cached;
 
-    final attachmentId = resolveAttachmentIdForLocalPath(key);
-    if (attachmentId == null) return null;
+    final candidates = _candidateAttachmentIdsForPath(key);
+    if (candidates.isEmpty) return null;
 
-    final bytes = await _service!.getAttachmentBytes(
-      ticket: _ticket!,
-      attachmentId: attachmentId,
-    );
-    final out = Uint8List.fromList(bytes);
-    _bytesCache[key] = out;
-    return out;
+    for (final attachmentId in candidates) {
+      try {
+        final bytes = await _service!.getAttachmentBytes(
+          ticket: _ticket!,
+          attachmentId: attachmentId,
+        );
+        final out = Uint8List.fromList(bytes);
+        _bytesCache[key] = out;
+        _missingLocalPaths.remove(key);
+        return out;
+      } catch (_) {
+        // Try next candidate; legacy submissions can vary id shape.
+      }
+    }
+
+    _missingLocalPaths.add(key);
+    return null;
   }
 
   Future<String> uploadNewImage({

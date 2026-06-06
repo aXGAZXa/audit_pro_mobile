@@ -9,6 +9,7 @@ import 'hna_observations_list_screen.dart';
 import 'meter_list_screen.dart';
 import '../../../services/form_validation_feedback.dart';
 import '../../../services/platform/image_persistence.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 
 class AddDwellingInspectionScreen extends StatefulWidget {
   const AddDwellingInspectionScreen({super.key});
@@ -1047,9 +1048,7 @@ class _AddDwellingInspectionScreenState
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error saving inspection: $e')));
+        ApmFeedback.error(context, 'Error saving inspection: $e');
       }
       return null;
     }

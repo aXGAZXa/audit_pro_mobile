@@ -195,6 +195,27 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
         }
 
         final formData = Map<String, dynamic>.from(conditionReportRaw);
+        final submissionId =
+            (submission['submissionId'] ?? submission['SubmissionId'] ?? '')
+                .toString()
+                .trim();
+
+        final attachmentsRaw = formData['attachments'];
+        final attachments = <Map<String, dynamic>>[];
+        if (attachmentsRaw is List) {
+          for (final item in attachmentsRaw) {
+            if (item is Map) {
+              attachments.add(Map<String, dynamic>.from(item));
+            }
+          }
+        }
+
+        FormWebEditorAttachmentContext.instance.configure(
+          service: _service,
+          ticket: widget.ticket,
+          submissionId: submissionId,
+          initialAttachments: attachments,
+        );
 
         if (!mounted) return;
 

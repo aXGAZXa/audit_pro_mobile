@@ -57,11 +57,23 @@ class CrSubmissionService {
       'appVersion': '${appVersion.name}+${appVersion.code}',
     };
 
-    final json = await apiClient.postJson(
-      '/api/forms/submit',
-      bearerToken: token,
-      body: requestBody,
-    );
+    Map<String, dynamic> json;
+    try {
+      json = await apiClient.postJson(
+        '/api/forms/submit',
+        bearerToken: token,
+        body: requestBody,
+      );
+    } catch (e, st) {
+      ApmLogger.warning(
+        'CR submit request failed formId=$formId baseUrl=${apiClient.baseUrl}: {Error}',
+        args: [e.toString()],
+        category: 'CR/Submit',
+        error: e,
+        stackTrace: st,
+      );
+      rethrow;
+    }
 
     if (!PortalApiClient.readResultSuccess(json)) {
       throw PortalApiException(

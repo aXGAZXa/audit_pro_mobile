@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/platform/image_persistence.dart';
 import '../database/database_helper.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import '../components/app_scaffold.dart';
 import '../components/app_autocomplete_field.dart';
 import '../components/form_widgets.dart';
@@ -261,9 +262,7 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error saving asset: $e')));
+        ApmFeedback.error(context, 'Error saving asset: $e');
       }
     } finally {
       if (mounted) {

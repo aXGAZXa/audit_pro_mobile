@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/app_autocomplete_field.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:uuid/uuid.dart';
 import '../../../services/platform/image_persistence.dart';
 
@@ -218,9 +219,7 @@ class _AddCommunalControlScreenState extends State<AddCommunalControlScreen> {
     if (assets == null || onAssetsChanged == null) return false;
 
     if (_selectedType == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a control type')),
-      );
+      ApmFeedback.warning(context, 'Please select a control type');
       return false;
     }
 
@@ -315,9 +314,7 @@ class _AddCommunalControlScreenState extends State<AddCommunalControlScreen> {
     } catch (e) {
       if (!mounted) return false;
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error saving control: $e')));
+      ApmFeedback.error(context, 'Error saving control: $e');
       return false;
     }
   }

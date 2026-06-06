@@ -180,7 +180,7 @@ class HnaSubmissionService {
       }
     } catch (e, st) {
       ApmLogger.warning(
-        'Submit request failed formId=$formId: {Error}',
+        'Submit request failed formId=$formId baseUrl=${apiClient.baseUrl}: {Error}',
         args: [e.toString()],
         category: editSession != null ? 'HNA/EditSubmit' : 'HNA/Submit',
         error: e,

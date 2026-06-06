@@ -6,6 +6,7 @@ import 'package:audit_pro_mobile/auth/auth_storage.dart';
 import 'package:audit_pro_mobile/auth/jwt_payload.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/services/user_profile_store.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -186,9 +187,7 @@ class _SummarySignatureScreenState extends State<SummarySignatureScreen> {
         developer.log('Error saving (web editor): $e');
         if (mounted) {
           setState(() => _isSaving = false);
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error saving: $e')));
+          ApmFeedback.error(context, 'Error saving: $e');
         }
       }
       return;
@@ -267,9 +266,7 @@ class _SummarySignatureScreenState extends State<SummarySignatureScreen> {
       developer.log('Error saving signatures: $e');
       if (mounted) {
         setState(() => _isSaving = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error saving: $e')));
+        ApmFeedback.error(context, 'Error saving: $e');
       }
     }
   }

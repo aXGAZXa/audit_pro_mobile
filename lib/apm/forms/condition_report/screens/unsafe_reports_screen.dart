@@ -1,6 +1,7 @@
 import 'package:audit_pro_mobile/apm/components/entity_card.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:flutter/material.dart';
 
 import 'unsafe_details_screen.dart';
@@ -46,9 +47,7 @@ class _UnsafeReportsScreenState extends State<UnsafeReportsScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error loading reports: $e')));
+        ApmFeedback.error(context, 'Error loading reports: $e');
       }
     }
   }
@@ -113,15 +112,11 @@ class _UnsafeReportsScreenState extends State<UnsafeReportsScreen> {
         await DatabaseHelper.instance.deleteUnsafeReport(reportId);
         _loadReports();
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Report deleted')));
+          ApmFeedback.success(context, 'Report deleted');
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error deleting report: $e')));
+          ApmFeedback.error(context, 'Error deleting report: $e');
         }
       }
     }

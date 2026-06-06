@@ -2,6 +2,7 @@
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 
 class PlantRoomVentilationScreen extends StatefulWidget {
   const PlantRoomVentilationScreen({super.key});
@@ -63,9 +64,7 @@ class _PlantRoomVentilationScreenState
 
     if (_plantRoomId == null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Plant room ID is required')),
-        );
+        ApmFeedback.error(context, 'Plant room ID is required');
       }
       return;
     }

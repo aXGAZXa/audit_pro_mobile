@@ -11,7 +11,7 @@ This app uses `String.fromEnvironment('APM_API_BASE_URL')` to decide which API t
 
 The Heat Network Assessment (HNA) feature uses a separate portal base URL:
 - Flutter env define: `PORTAL_BASE_URL`
-- Default: `https://admin-portal.audit-pro.co.uk/`
+- Default: `https://portal.audit-pro.co.uk/`
 
 Pre-auth mobile auth endpoints (`/api/mobile/auth/request-otp`, `verify-otp`, `tenant-options`) require an API key header:
 - Flutter env define: `APM_MOBILE_AUTH_API_KEY`

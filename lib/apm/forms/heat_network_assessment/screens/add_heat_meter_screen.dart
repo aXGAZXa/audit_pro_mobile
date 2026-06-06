@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import '../../../database/database_helper.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
@@ -423,9 +424,7 @@ class _AddHeatMeterScreenState extends State<AddHeatMeterScreen> {
       return meter;
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error saving meter: $e')));
+        ApmFeedback.error(context, 'Error saving meter: $e');
       }
       return null;
     } finally {

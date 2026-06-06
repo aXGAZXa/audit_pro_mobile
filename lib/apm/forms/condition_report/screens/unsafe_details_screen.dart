@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
@@ -155,9 +156,7 @@ class _UnsafeDetailsScreenState extends State<UnsafeDetailsScreen> {
       developer.log('Error loading data: $e');
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error loading data: $e')));
+        ApmFeedback.error(context, 'Error loading data: $e');
       }
     }
   }
@@ -264,9 +263,7 @@ class _UnsafeDetailsScreenState extends State<UnsafeDetailsScreen> {
       developer.log('Error saving report: $e');
       if (mounted) {
         setState(() => _isSaving = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error saving report: $e')));
+        ApmFeedback.error(context, 'Error saving report: $e');
       }
     }
   }
@@ -508,8 +505,8 @@ class _UnsafeDetailsScreenState extends State<UnsafeDetailsScreen> {
                                     children: [
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(8),
-                                        child: Image.file(
-                                          File(_afterImagePath!),
+                                        child: AppResolvedImage(
+                                          imagePath: _afterImagePath!,
                                           width: double.infinity,
                                           height: 200,
                                           fit: BoxFit.cover,
@@ -570,8 +567,8 @@ class _UnsafeDetailsScreenState extends State<UnsafeDetailsScreen> {
                                     children: [
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(8),
-                                        child: Image.file(
-                                          File(_warningNoticeImagePath!),
+                                        child: AppResolvedImage(
+                                          imagePath: _warningNoticeImagePath!,
                                           width: double.infinity,
                                           height: 200,
                                           fit: BoxFit.cover,

@@ -4,6 +4,7 @@ import '../../../components/app_info_panel.dart';
 import '../../../components/app_scaffold.dart';
 import '../../../components/form_widgets.dart';
 import '../../../services/platform/image_persistence.dart';
+import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 
 class FeasibilityDetailsScreen extends StatefulWidget {
   const FeasibilityDetailsScreen({super.key});
@@ -55,9 +56,7 @@ class _FeasibilityDetailsScreenState extends State<FeasibilityDetailsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error picking image: $e')));
+        ApmFeedback.error(context, 'Error picking image: $e');
       }
     }
   }
