@@ -7,10 +7,16 @@ import 'package:audit_pro_mobile/apm/forms/shared/editor/form_draft_persistence_
 import 'package:audit_pro_mobile/apm/services/platform/image_persistence.dart';
 import 'package:image_picker/image_picker.dart';
 
-/// Mobile [FormRepository]: the form's working data is the on-device SQLite
-/// draft's `form_data` blob; named collections are list-valued keys within it.
-/// Submission is delegated to an injected, form-specific submitter (the only
-/// legitimately form-specific seam — the payload builder + endpoint).
+/// Mobile [FormRepository]. The form's top-level fields live in the on-device
+/// draft's `form_data` blob; **collections bridge to the existing typed SQLite
+/// tables** so the repo shares one source of truth with any not-yet-migrated
+/// sub-screen (no split-brain) and the proven mobile submit path
+/// (`CrSubmissionService` building from those tables) is unchanged.
+///
+/// Collections are bridged incrementally — known ones route to `DatabaseHelper`;
+/// any not-yet-bridged collection falls back to the blob, which is harmless
+/// because un-migrated screens still talk to the DB directly. Submission is an
+/// injected, form-specific submitter (the only legit form-specific seam).
 class SqliteFormRepository implements FormRepository {
   SqliteFormRepository({
     DatabaseHelper? db,
@@ -73,9 +79,13 @@ class SqliteFormRepository implements FormRepository {
   Future<void> flushDraft() =>
       _drafts.flush(formType: _formType, formId: _formId);
 
-  // --- generic collections ---------------------------------------------------
+  // --- generic collections (bridge known ones to typed tables) ---------------
 
-  List<Map<String, dynamic>> _readCollection(String collection) {
+  @override
+  Future<List<Map<String, dynamic>>> getCollection(String collection) async {
+    final bridged = await _readBridged(collection);
+    if (bridged != null) return bridged;
+    // Not-yet-bridged collection: serve from the blob.
     final raw = _data[collection];
     if (raw is! List) return <Map<String, dynamic>>[];
     return raw
@@ -84,24 +94,35 @@ class SqliteFormRepository implements FormRepository {
         .toList();
   }
 
-  @override
-  List<Map<String, dynamic>> getCollection(String collection) =>
-      _readCollection(collection);
+  Future<List<Map<String, dynamic>>?> _readBridged(String collection) async {
+    switch (collection) {
+      case 'observations':
+        return _db.getFormObservations(_formId);
+      case 'unsafeObservations':
+        return _db.getUnsafeObservations(_formId);
+      default:
+        return null; // not yet bridged — fall back to the blob
+    }
+  }
 
   @override
-  Map<String, dynamic>? getCollectionItem(String collection, Object id) {
-    for (final item in _readCollection(collection)) {
+  Future<Map<String, dynamic>?> getCollectionItem(
+    String collection,
+    Object id,
+  ) async {
+    for (final item in await getCollection(collection)) {
       if (item['id'] == id) return item;
     }
     return null;
   }
 
   @override
-  List<Map<String, dynamic>> queryCollection(
+  Future<List<Map<String, dynamic>>> queryCollection(
     String collection, {
     Map<String, Object?> where = const <String, Object?>{},
-  }) {
-    return _readCollection(collection)
+  }) async {
+    final items = await getCollection(collection);
+    return items
         .where((item) => where.entries.every((e) => item[e.key] == e.value))
         .toList();
   }
@@ -111,54 +132,54 @@ class SqliteFormRepository implements FormRepository {
     String collection,
     Map<String, dynamic> item,
   ) async {
-    final list = _data[collection] is List
-        ? List<dynamic>.from(_data[collection] as List)
-        : <dynamic>[];
-
-    final incomingId = item['id'];
-    final existingIndex =
-        incomingId == null ? -1 : _indexOfId(list, incomingId);
-    final next = Map<String, dynamic>.from(item);
-
-    final Object resolvedId;
-    if (existingIndex >= 0) {
-      resolvedId = incomingId as Object;
-      list[existingIndex] = next;
-    } else {
-      resolvedId = incomingId ?? _nextId(list);
-      next['id'] = resolvedId;
-      list.add(next);
+    switch (collection) {
+      case 'observations':
+        final id = await _db.saveObservation(
+          formId: _formId,
+          questionReference:
+              (item['question_reference'] ?? item['questionReference'] ?? '')
+                  .toString(),
+          notes: (item['notes'] as String?)?.trim().isEmpty ?? true
+              ? null
+              : item['notes'] as String?,
+          imagePaths:
+              (item['images'] ?? item['imagePaths']) is List
+                  ? List<String>.from(
+                      (item['images'] ?? item['imagePaths']) as List)
+                  : null,
+        );
+        return id;
+      default:
+        // Not-yet-bridged collection: keep it in the blob.
+        final list = _data[collection] is List
+            ? List<dynamic>.from(_data[collection] as List)
+            : <dynamic>[];
+        final next = Map<String, dynamic>.from(item);
+        final id = next['id'] ?? (list.length + 1);
+        next['id'] = id;
+        final idx = list.indexWhere((e) => e is Map && e['id'] == id);
+        if (idx >= 0) {
+          list[idx] = next;
+        } else {
+          list.add(next);
+        }
+        _data[collection] = list;
+        await saveDraft();
+        return id;
     }
-
-    _data[collection] = list;
-    await saveDraft();
-    return resolvedId;
   }
 
   @override
   Future<void> deleteCollectionItem(String collection, Object id) async {
-    final raw = _data[collection];
-    if (raw is! List) return;
-    raw.removeWhere((e) => e is Map && e['id'] == id);
-    await saveDraft();
-  }
-
-  int _indexOfId(List<dynamic> list, Object id) {
-    for (var i = 0; i < list.length; i++) {
-      final e = list[i];
-      if (e is Map && e['id'] == id) return i;
+    switch (collection) {
+      case 'observations':
+        if (id is int) await _db.deleteObservation(id);
+        return;
+      default:
+        final raw = _data[collection];
+        if (raw is List) raw.removeWhere((e) => e is Map && e['id'] == id);
+        await saveDraft();
     }
-    return -1;
-  }
-
-  int _nextId(List<dynamic> list) {
-    var max = 0;
-    for (final e in list) {
-      if (e is Map && e['id'] is int && (e['id'] as int) > max) {
-        max = e['id'] as int;
-      }
-    }
-    return max + 1;
   }
 
   // --- images ----------------------------------------------------------------

@@ -50,16 +50,16 @@ abstract class FormRepository {
 
   // --- generic collections ----------------------------------------------------
 
-  /// All items in [collection] (e.g. `'observations'`). Reads from the loaded
-  /// in-memory model, so it is synchronous.
-  List<Map<String, dynamic>> getCollection(String collection);
+  /// All items in [collection] (e.g. `'observations'`). Async because the mobile
+  /// impl reads the SQLite tables; the web impl resolves its in-memory list.
+  Future<List<Map<String, dynamic>>> getCollection(String collection);
 
   /// A single item in [collection] by its `'id'`, or null.
-  Map<String, dynamic>? getCollectionItem(String collection, Object id);
+  Future<Map<String, dynamic>?> getCollectionItem(String collection, Object id);
 
   /// Items in [collection] matching all of [where] (key == value), e.g.
   /// `queryCollection('observations', where: {'questionReference': 'CR.SITE.01'})`.
-  List<Map<String, dynamic>> queryCollection(
+  Future<List<Map<String, dynamic>>> queryCollection(
     String collection, {
     Map<String, Object?> where = const <String, Object?>{},
   });

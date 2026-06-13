@@ -84,11 +84,14 @@ class WebFormRepository implements FormRepository {
   }
 
   @override
-  List<Map<String, dynamic>> getCollection(String collection) =>
+  Future<List<Map<String, dynamic>>> getCollection(String collection) async =>
       _readCollection(collection);
 
   @override
-  Map<String, dynamic>? getCollectionItem(String collection, Object id) {
+  Future<Map<String, dynamic>?> getCollectionItem(
+    String collection,
+    Object id,
+  ) async {
     for (final item in _readCollection(collection)) {
       if (item['id'] == id) return item;
     }
@@ -96,10 +99,10 @@ class WebFormRepository implements FormRepository {
   }
 
   @override
-  List<Map<String, dynamic>> queryCollection(
+  Future<List<Map<String, dynamic>>> queryCollection(
     String collection, {
     Map<String, Object?> where = const <String, Object?>{},
-  }) {
+  }) async {
     return _readCollection(collection)
         .where((item) => where.entries.every((e) => item[e.key] == e.value))
         .toList();
