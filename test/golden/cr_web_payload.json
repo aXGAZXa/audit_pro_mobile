@@ -1,0 +1,77 @@
+{
+  "conditionReport": {
+    "assets": [
+      {
+        "assetMake": "Bosch",
+        "assetModel": "GB162",
+        "assetTypeId": 7,
+        "id": 1,
+        "imagePaths": [
+          "att_0001"
+        ],
+        "location": "Plant Room A",
+        "operational": "yes",
+        "visualCondition": "good"
+      }
+    ],
+    "attachments": [
+      {
+        "contentType": "image/jpeg",
+        "id": "att_0001",
+        "localPath": "asset_1_front.jpg"
+      },
+      {
+        "contentType": "image/jpeg",
+        "id": "att_0002",
+        "localPath": "obs_1_a.jpg"
+      },
+      {
+        "contentType": "image/jpeg",
+        "id": "att_0003",
+        "localPath": "obs_1_b.jpg"
+      },
+      {
+        "contentType": "image/jpeg",
+        "id": "att_0004",
+        "localPath": "plantroom_1_access.jpg"
+      }
+    ],
+    "auditDate": "2025-12-10",
+    "auditorName": "Jane Assessor",
+    "client": "Acme Housing",
+    "observations": [
+      {
+        "id": 1,
+        "imagePaths": [
+          "att_0002",
+          "att_0003"
+        ],
+        "isUnsafe": false,
+        "notes": "Minor corrosion on flow pipe.",
+        "questionReference": "CR.SITE.01"
+      }
+    ],
+    "plantRooms": [
+      {
+        "accessImagePaths": [
+          "att_0004"
+        ],
+        "id": 1,
+        "internalImagePaths": [],
+        "location": "Basement"
+      }
+    ],
+    "siteName": "Riverside Court",
+    "unsafe": {
+      "unsafeObservations": [],
+      "unsafeReports": []
+    }
+  },
+  "form": {
+    "formId": 1234,
+    "formType": "condition_report",
+    "submittedAtUtc": "2026-01-01T12:00:00.000Z",
+    "uuid": "cr-uuid-fixed-0001"
+  },
+  "payloadSchemaVersion": 2
+}
