@@ -7,6 +7,7 @@ import '../logging/apm_logger.dart';
 import '../apm/database/database_helper.dart';
 import '../apm/forms/condition_report/condition_report_definition.dart';
 import '../apm/forms/condition_report/condition_report_screen.dart';
+import '../apm/forms/condition_report/cr_repository_factory.dart';
 import '../apm/forms/condition_report/services/cr_submission_service.dart';
 import '../apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
 import '../apm/forms/heat_network_assessment/services/hna_form_delete_service.dart';
@@ -460,7 +461,10 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
                     name: isCr ? '/condition-report' : '/hna',
                   ),
                   builder: (_) => isCr
-                      ? ConditionReportScreen(formId: formId)
+                      ? ConditionReportScreen(
+                          formId: formId,
+                          repo: createCrMobileRepository(),
+                        )
                       : HeatNetworkAssessmentScreen(formId: formId),
                 ),
               );

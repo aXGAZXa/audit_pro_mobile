@@ -64,6 +64,7 @@ class WebFormRepository implements FormRepository {
   @override
   Future<void> saveDraft({
     String status = 'draft',
+    bool keepCurrentPointer = true,
     FormSavePolicy savePolicy = const FormSavePolicy.immediate(),
   }) async {
     // Web edits are held in memory until completion; there is no draft sink.

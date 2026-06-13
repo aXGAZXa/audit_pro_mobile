@@ -4,6 +4,7 @@ import '../app/app_scaffold.dart';
 import '../apm/database/database_helper.dart';
 import '../apm/forms/condition_report/condition_report_definition.dart';
 import '../apm/forms/condition_report/condition_report_screen.dart';
+import '../apm/forms/condition_report/cr_repository_factory.dart';
 import '../apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
 import '../auth/auth_session.dart';
 import '../hna/heat_network_assessment/heat_network_assessment_screen.dart';
@@ -106,7 +107,10 @@ class FormsHomeScreen extends StatelessWidget {
         await Navigator.of(context).push(
           MaterialPageRoute(
             settings: const RouteSettings(name: '/condition-report'),
-            builder: (_) => ConditionReportScreen(formId: resumeId),
+            builder: (_) => ConditionReportScreen(
+              formId: resumeId,
+              repo: createCrMobileRepository(),
+            ),
           ),
         );
         return;
@@ -117,7 +121,10 @@ class FormsHomeScreen extends StatelessWidget {
     await Navigator.of(context).push(
       MaterialPageRoute(
         settings: const RouteSettings(name: '/condition-report'),
-        builder: (_) => const ConditionReportScreen(forceNew: true),
+        builder: (_) => ConditionReportScreen(
+        forceNew: true,
+        repo: createCrMobileRepository(),
+      ),
       ),
     );
   }

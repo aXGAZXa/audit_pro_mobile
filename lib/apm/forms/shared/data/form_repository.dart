@@ -39,9 +39,12 @@ abstract class FormRepository {
   int get formId;
 
   /// Persist the active form's current state via the platform sink (SQLite on
-  /// mobile; in-memory until completion on web).
+  /// mobile; in-memory until completion on web). [keepCurrentPointer] controls
+  /// the mobile "current draft" pointer (set false on completion so the form
+  /// leaves the active-draft slot); ignored on web.
   Future<void> saveDraft({
     String status = 'draft',
+    bool keepCurrentPointer = true,
     FormSavePolicy savePolicy = const FormSavePolicy.immediate(),
   });
 

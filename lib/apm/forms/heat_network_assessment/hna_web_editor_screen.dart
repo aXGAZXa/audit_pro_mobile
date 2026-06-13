@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../condition_report/condition_report_definition.dart';
 import '../condition_report/condition_report_screen.dart';
 import '../condition_report/services/cr_submission_payload_builder.dart';
+import '../shared/data/web_form_repository.dart';
 import '../shared/editor/form_editor_contract.dart';
 import 'heat_network_assessment_definition.dart';
 import '../../services/portal_api_client.dart';
@@ -217,6 +218,14 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
           initialAttachments: attachments,
         );
 
+        final crFormSection = payload['form'];
+        final crLocalFormId = crFormSection is Map
+            ? int.tryParse((crFormSection['formId'] ?? '').toString())
+            : null;
+        final crFormUuid = crFormSection is Map
+            ? (crFormSection['uuid'] ?? '').toString()
+            : null;
+
         if (!mounted) return;
 
         Navigator.of(context).pushReplacement(
@@ -224,8 +233,39 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
             settings: const RouteSettings(name: '/cr-web-editor'),
             builder: (_) => ConditionReportScreen(
               mode: FormEditorRuntimeMode.webEditor,
-              initialFormData: formData,
-              onCompleteForm: _completeConditionReportWebEditor,
+              formId: crLocalFormId,
+              repo: WebFormRepository(
+                service: _service,
+                ticket: widget.ticket,
+                formType: kConditionReportFormType,
+                formId: crLocalFormId ?? 0,
+                initialData: formData,
+                generatePdfOnSubmit: false,
+                buildPayloadJson: (data) => jsonEncode(
+                  CrSubmissionPayloadBuilder.buildFromFormSnapshot(
+                    formSnapshot: data,
+                    originalPayload: _crOriginalPayload,
+                    formId: crLocalFormId,
+                    formUuid: crFormUuid,
+                    submittedAt: DateTime.now().toUtc(),
+                  ),
+                ),
+              ),
+              onCompleted: () async {
+                if (kIsWeb) {
+                  WebEditorReturn.notifyParentComplete(
+                    ticket: widget.ticket,
+                    returnUrl: _returnUrl,
+                  );
+                  if (_returnUrl != null && _returnUrl!.isNotEmpty) {
+                    WebEditorReturn.returnToCaller(
+                      _returnUrl!,
+                      ticket: widget.ticket,
+                      preferClose: false,
+                    );
+                  }
+                }
+              },
             ),
           ),
         );
@@ -356,38 +396,6 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
     }
   }
 
-  Future<void> _completeConditionReportWebEditor(
-    FormEditorCompletion completion,
-  ) async {
-    final payload = CrSubmissionPayloadBuilder.buildFromFormSnapshot(
-      formSnapshot: completion.formData,
-      originalPayload: _crOriginalPayload,
-      formId: completion.localFormId,
-      formUuid: completion.formUuid,
-      submittedAt: DateTime.now().toUtc(),
-    );
-
-    await _service.updateSubmission(
-      ticket: widget.ticket,
-      payloadJson: jsonEncode(payload),
-      generatePdf: false,
-    );
-
-    if (kIsWeb) {
-      WebEditorReturn.notifyParentComplete(
-        ticket: widget.ticket,
-        returnUrl: _returnUrl,
-      );
-
-      if (_returnUrl != null && _returnUrl!.isNotEmpty) {
-        WebEditorReturn.returnToCaller(
-          _returnUrl!,
-          ticket: widget.ticket,
-          preferClose: false,
-        );
-      }
-    }
-  }
 
   String _resolveSessionFormType(Map<String, dynamic> session) {
     final raw =

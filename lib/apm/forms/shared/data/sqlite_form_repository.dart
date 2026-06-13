@@ -64,15 +64,29 @@ class SqliteFormRepository implements FormRepository {
   @override
   Future<void> saveDraft({
     String status = 'draft',
+    bool keepCurrentPointer = true,
     FormSavePolicy savePolicy = const FormSavePolicy.immediate(),
   }) {
     return _drafts.save(
       formType: _formType,
       formId: _formId,
       status: status,
-      formData: _data,
+      // The screen may hold DateTime values; the draft blob is JSON.
+      formData: _jsonSafe(_data) as Map<String, dynamic>,
+      keepCurrentPointer: keepCurrentPointer,
       savePolicy: savePolicy,
     );
+  }
+
+  static Object? _jsonSafe(Object? value) {
+    if (value is DateTime) return value.toIso8601String();
+    if (value is Map) {
+      return <String, dynamic>{
+        for (final e in value.entries) e.key.toString(): _jsonSafe(e.value),
+      };
+    }
+    if (value is List) return value.map(_jsonSafe).toList();
+    return value;
   }
 
   @override
