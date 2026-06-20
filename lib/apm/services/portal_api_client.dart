@@ -193,6 +193,42 @@ class PortalApiClient {
     return json;
   }
 
+  Future<Map<String, dynamic>> deleteJson(
+    String path, {
+    String? bearerToken,
+    Map<String, String>? headers,
+  }) async {
+    final uri = _uri(path);
+
+    final reqHeaders = <String, String>{
+      'Accept': 'application/json',
+      if (bearerToken != null && bearerToken.trim().isNotEmpty)
+        'Authorization': 'Bearer ${bearerToken.trim()}',
+    };
+
+    if (headers != null) {
+      reqHeaders.addAll(headers);
+    }
+
+    final response = await httpClient.delete(uri, headers: reqHeaders);
+
+    Map<String, dynamic> json;
+    try {
+      final decoded = jsonDecode(response.body);
+      json = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+    } catch (_) {
+      json = <String, dynamic>{};
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final message =
+          _readMessage(json) ?? response.reasonPhrase ?? 'Request failed';
+      throw PortalApiException(message, statusCode: response.statusCode);
+    }
+
+    return json;
+  }
+
   static bool? _readSuccess(Map<String, dynamic> json) {
     final v = json['Success'] ?? json['success'];
     return v is bool ? v : null;

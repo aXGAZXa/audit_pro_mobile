@@ -1,6 +1,7 @@
 import 'package:audit_pro_mobile/apm/components/entity_card.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:flutter/material.dart';
 
@@ -9,11 +10,13 @@ import 'unsafe_details_screen.dart';
 class UnsafeReportsScreen extends StatefulWidget {
   final int formId;
   final VoidCallback onBack;
+  final FormRepository? repo;
 
   const UnsafeReportsScreen({
     super.key,
     required this.formId,
     required this.onBack,
+    this.repo,
   });
 
   @override
@@ -58,6 +61,7 @@ class _UnsafeReportsScreenState extends State<UnsafeReportsScreen> {
       MaterialPageRoute(
         builder: (context) => UnsafeDetailsScreen(
           formId: widget.formId,
+          repo: widget.repo,
           onBack: () => Navigator.pop(context, false),
           onSave: () => Navigator.pop(context, true),
         ),
@@ -76,6 +80,7 @@ class _UnsafeReportsScreenState extends State<UnsafeReportsScreen> {
         builder: (context) => UnsafeDetailsScreen(
           formId: widget.formId,
           reportId: reportId,
+          repo: widget.repo,
           onBack: () => Navigator.pop(context, false),
           onSave: () => Navigator.pop(context, true),
         ),
@@ -109,7 +114,11 @@ class _UnsafeReportsScreenState extends State<UnsafeReportsScreen> {
 
     if (confirmed == true) {
       try {
-        await DatabaseHelper.instance.deleteUnsafeReport(reportId);
+        if (widget.repo != null) {
+          await widget.repo!.deleteCollectionItem('unsafeReports', reportId);
+        } else {
+          await DatabaseHelper.instance.deleteUnsafeReport(reportId);
+        }
         _loadReports();
         if (mounted) {
           ApmFeedback.success(context, 'Report deleted');

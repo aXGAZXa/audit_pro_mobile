@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:image_picker/image_picker.dart';
 
 class CommunalHeatingSystemScreen extends StatefulWidget {
@@ -8,6 +9,7 @@ class CommunalHeatingSystemScreen extends StatefulWidget {
   final VoidCallback onNext;
   final VoidCallback onBack;
   final int? formId;
+  final FormRepository? repo;
   final VoidCallback? onObservationsChanged;
   final bool Function(String)? hasObservations;
 
@@ -18,6 +20,7 @@ class CommunalHeatingSystemScreen extends StatefulWidget {
     required this.onNext,
     required this.onBack,
     this.formId,
+    this.repo,
     this.onObservationsChanged,
     this.hasObservations,
   });
@@ -194,6 +197,7 @@ class _CommunalHeatingSystemScreenState
                             setState(() => _communalRadiatorImages = images);
                           },
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call(
                                 'communalRadiatorImages',
@@ -213,6 +217,7 @@ class _CommunalHeatingSystemScreenState
                             setState(() => _communalPipeworkImages = images);
                           },
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call(
                                 'communalPipeworkImages',

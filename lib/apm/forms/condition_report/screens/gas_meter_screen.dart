@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 
 class GasMeterScreen extends StatefulWidget {
   final Map<String, dynamic> formData;
@@ -7,6 +8,7 @@ class GasMeterScreen extends StatefulWidget {
   final VoidCallback onNext;
   final VoidCallback onBack;
   final int? formId;
+  final FormRepository? repo;
   final VoidCallback? onObservationsChanged;
   final bool Function(String)? hasObservations;
 
@@ -17,6 +19,7 @@ class GasMeterScreen extends StatefulWidget {
     required this.onNext,
     required this.onBack,
     this.formId,
+    this.repo,
     this.onObservationsChanged,
     this.hasObservations,
   });
@@ -194,6 +197,7 @@ class _GasMeterScreenState extends State<GasMeterScreen> {
                           });
                         },
                         formId: widget.formId,
+                        repo: widget.repo,
                         hasObservations:
                             widget.hasObservations?.call('g1') ?? false,
                         onObservationsChanged: widget.onObservationsChanged,
@@ -207,6 +211,7 @@ class _GasMeterScreenState extends State<GasMeterScreen> {
                           onAnswerChanged: (value) =>
                               setState(() => _g2SuitableLocation = value),
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call('g2') ?? false,
                           onObservationsChanged: widget.onObservationsChanged,
@@ -219,6 +224,7 @@ class _GasMeterScreenState extends State<GasMeterScreen> {
                           onAnswerChanged: (value) =>
                               setState(() => _g3CorrectlyInstalled = value),
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call('g3') ?? false,
                           onObservationsChanged: widget.onObservationsChanged,
@@ -231,6 +237,7 @@ class _GasMeterScreenState extends State<GasMeterScreen> {
                           onAnswerChanged: (value) =>
                               setState(() => _g4Ventilated = value),
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call('g4') ?? false,
                           onObservationsChanged: widget.onObservationsChanged,
@@ -243,6 +250,7 @@ class _GasMeterScreenState extends State<GasMeterScreen> {
                           onAnswerChanged: (value) =>
                               setState(() => _g5Secure = value),
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call('g5') ?? false,
                           onObservationsChanged: widget.onObservationsChanged,
@@ -255,6 +263,7 @@ class _GasMeterScreenState extends State<GasMeterScreen> {
                           onAnswerChanged: (value) =>
                               setState(() => _g6Labelled = value),
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call('g6') ?? false,
                           onObservationsChanged: widget.onObservationsChanged,
@@ -268,6 +277,7 @@ class _GasMeterScreenState extends State<GasMeterScreen> {
                           onAnswerChanged: (value) =>
                               setState(() => _g7IsolationValves = value),
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call('g7') ?? false,
                           onObservationsChanged: widget.onObservationsChanged,
@@ -281,6 +291,7 @@ class _GasMeterScreenState extends State<GasMeterScreen> {
                           onAnswerChanged: (value) =>
                               setState(() => _g8EarthBonding = value),
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call('g8') ?? false,
                           onObservationsChanged: widget.onObservationsChanged,
@@ -294,6 +305,7 @@ class _GasMeterScreenState extends State<GasMeterScreen> {
                           onAnswerChanged: (value) =>
                               setState(() => _g9LineDiagram = value),
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call('g9') ?? false,
                           onObservationsChanged: widget.onObservationsChanged,
@@ -306,6 +318,7 @@ class _GasMeterScreenState extends State<GasMeterScreen> {
                           onAnswerChanged: (value) =>
                               setState(() => _g10NoGasSmell = value),
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call('g10') ?? false,
                           onObservationsChanged: widget.onObservationsChanged,

@@ -23,7 +23,6 @@ class HnaDerivedMetricsCalculator {
 
     final observations = _asListOfMapsFromDynamicList(observationsJson);
     final unsafeObservations = _asListOfMaps(unsafeJson?['unsafeObservations']);
-    final unsafeReports = _asListOfMaps(unsafeJson?['unsafeReports']);
     final unreportedUnsafeObservations = _asListOfMaps(
       unsafeJson?['unreportedUnsafeObservations'],
     );
@@ -143,10 +142,12 @@ class HnaDerivedMetricsCalculator {
       dwellingDhwMeterFeasibility: dwellingFeasibility.dhw,
       hasDwellingMeterEvidence: hasDwellingMeterEvidence,
       observationCount: observations.length,
+      // Count distinct unsafe SITUATIONS (the unsafe observations, reported or
+      // not). An unsafe report is the remediation OF an observation, not an
+      // additional unsafe — including it double-counts (e.g. 1 unsafe obs + its
+      // report was reported as 2).
       unsafeCount:
-          unsafeObservations.length +
-          unsafeReports.length +
-          unreportedUnsafeObservations.length,
+          unsafeObservations.length + unreportedUnsafeObservations.length,
       methodologyVersion: methodologyVersion,
     );
   }

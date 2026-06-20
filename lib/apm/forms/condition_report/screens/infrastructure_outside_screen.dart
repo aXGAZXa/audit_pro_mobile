@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 
 class InfrastructureOutsideScreen extends StatefulWidget {
   final Map<String, dynamic> formData;
@@ -7,6 +8,7 @@ class InfrastructureOutsideScreen extends StatefulWidget {
   final VoidCallback onNext;
   final VoidCallback onBack;
   final int? formId;
+  final FormRepository? repo;
   final VoidCallback? onObservationsChanged;
   final bool Function(String)? hasObservations;
 
@@ -17,6 +19,7 @@ class InfrastructureOutsideScreen extends StatefulWidget {
     required this.onNext,
     required this.onBack,
     this.formId,
+    this.repo,
     this.onObservationsChanged,
     this.hasObservations,
   });
@@ -126,6 +129,7 @@ class _InfrastructureOutsideScreenState
                         onAnswerChanged: (value) =>
                             setState(() => _io1Supported = value),
                         formId: widget.formId,
+                        repo: widget.repo,
                         hasObservations:
                             widget.hasObservations?.call('io1') ?? false,
                         onObservationsChanged: widget.onObservationsChanged,
@@ -138,6 +142,7 @@ class _InfrastructureOutsideScreenState
                         onAnswerChanged: (value) =>
                             setState(() => _io2Identified = value),
                         formId: widget.formId,
+                        repo: widget.repo,
                         hasObservations:
                             widget.hasObservations?.call('io2') ?? false,
                         onObservationsChanged: widget.onObservationsChanged,
@@ -150,6 +155,7 @@ class _InfrastructureOutsideScreenState
                         onAnswerChanged: (value) =>
                             setState(() => _io3VisuallySound = value),
                         formId: widget.formId,
+                        repo: widget.repo,
                         hasObservations:
                             widget.hasObservations?.call('io3') ?? false,
                         onObservationsChanged: widget.onObservationsChanged,
@@ -163,6 +169,7 @@ class _InfrastructureOutsideScreenState
                         onAnswerChanged: (value) =>
                             setState(() => _io4Sleeved = value),
                         formId: widget.formId,
+                        repo: widget.repo,
                         hasObservations:
                             widget.hasObservations?.call('io4') ?? false,
                         onObservationsChanged: widget.onObservationsChanged,

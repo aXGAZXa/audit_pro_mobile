@@ -1,24 +1,95 @@
 import 'package:flutter/material.dart';
+import 'package:gtapp_mobile/gtapp_mobile.dart' as gtmobile;
 
 import '../app/app_scaffold.dart';
+import '../app/app_shell_config.dart';
 import '../apm/database/database_helper.dart';
 import '../apm/forms/condition_report/condition_report_definition.dart';
 import '../apm/forms/condition_report/condition_report_screen.dart';
 import '../apm/forms/condition_report/cr_repository_factory.dart';
+import '../apm/forms/generic_skeleton/form_definition_catalog_service.dart';
+import '../apm/forms/generic_skeleton/generic_form_submission_service.dart';
+import '../apm/forms/generic_skeleton/server_forms_screen.dart';
 import '../apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
 import '../auth/auth_session.dart';
 import '../hna/heat_network_assessment/heat_network_assessment_screen.dart';
+import '../logging/apm_feedback.dart';
+import '../logging/apm_logger.dart';
 
-class FormsHomeScreen extends StatelessWidget {
-  const FormsHomeScreen({super.key, required this.session});
+class FormsHomeScreen extends StatefulWidget {
+  const FormsHomeScreen({
+    super.key,
+    required this.session,
+    this.catalogService,
+  });
 
   final AuthSession session;
 
+  /// Override for tests; defaults to a real [FormDefinitionCatalogService].
+  final FormDefinitionCatalogService? catalogService;
+
+  @override
+  State<FormsHomeScreen> createState() => _FormsHomeScreenState();
+}
+
+class _FormsHomeScreenState extends State<FormsHomeScreen> {
+  late final FormDefinitionCatalogService _catalog =
+      widget.catalogService ?? FormDefinitionCatalogService();
+
+  /// Server-declared (form-builder) forms scoped to THIS app by the JWT
+  /// `app_id` claim. Loaded once on init; rendered ALONGSIDE the hardcoded
+  /// CR/HNA cards. On empty or failure this resolves to an empty list so the
+  /// hardcoded cards are never disturbed (see [_buildDeclaredFormsSection]).
+  late Future<List<FormDefinitionSummary>> _declaredFormsFuture;
+
+  String? _openingDeclaredId;
+
+  @override
+  void initState() {
+    super.initState();
+    _declaredFormsFuture = _loadDeclaredForms();
+  }
+
+  /// Fetches this app's declared forms, swallowing any failure (logged) so a
+  /// fetch/parse problem can NEVER break the hardcoded cards. Returns [] on
+  /// error → the section renders nothing.
+  Future<List<FormDefinitionSummary>> _loadDeclaredForms() async {
+    try {
+      return await _catalog.listAppDefinitions();
+    } catch (e, st) {
+      ApmLogger.warning(
+        'Declared forms list failed; hardcoded cards unaffected: {Error}',
+        args: [e.toString()],
+        category: 'GenericForms/Home',
+        error: e,
+        stackTrace: st,
+      );
+      return const [];
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Backend-driven home: when a home screen is delivered, render it via the
+    // generic screen engine. Otherwise fall back to the built-in home below, so
+    // the app is byte-identical to today when nothing is delivered.
+    final homeScreen = AppShellConfig.of(context)?.homeScreen;
+    if (homeScreen != null) {
+      return AppScaffold(
+        title: homeScreen.title.isNotEmpty
+            ? homeScreen.title
+            : 'Data Capture Forms',
+        session: widget.session,
+        body: gtmobile.GTScreenRenderer(
+          screen: homeScreen,
+          onAction: (ctx, action) => Navigator.pushNamed(ctx, action),
+        ),
+      );
+    }
+
     return AppScaffold(
       title: 'Data Capture Forms',
-      session: session,
+      session: widget.session,
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(8),
         child: Column(
@@ -43,10 +114,115 @@ class FormsHomeScreen extends StatelessWidget {
                 await _openCrFromHome(context);
               },
             ),
+            _buildDeclaredFormsSection(context),
           ],
         ),
       ),
     );
+  }
+
+  /// The ADDITIVE declared-forms section. Sits BELOW the hardcoded CR/HNA cards.
+  /// - while loading: a small inline indicator.
+  /// - empty result (or any error → []): renders NOTHING extra, so a fresh app
+  ///   looks unchanged.
+  /// - otherwise: a "Forms" header + one card per declared form.
+  Widget _buildDeclaredFormsSection(BuildContext context) {
+    return FutureBuilder<List<FormDefinitionSummary>>(
+      future: _declaredFormsFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+
+        final forms = snapshot.data ?? const <FormDefinitionSummary>[];
+        if (forms.isEmpty) {
+          // Empty or failed → nothing extra; hardcoded cards stand alone.
+          return const SizedBox.shrink();
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 24),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text(
+                'Forms',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            const SizedBox(height: 8),
+            for (final form in forms) ...[
+              _buildFormCard(
+                context,
+                title: form.displayName,
+                description:
+                    form.formType.isNotEmpty ? form.formType : null,
+                icon: Icons.description_outlined,
+                color: Colors.teal.shade400,
+                trailing: _openingDeclaredId == form.id
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : null,
+                onTap: () async {
+                  await _openDeclaredForm(form);
+                },
+              ),
+              const SizedBox(height: 12),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  /// Fetches the declared form's [gtmobile.FormPackage] then pushes the shared
+  /// [ServerFormRenderScreen] (the EXACT render+submit path used by the debug
+  /// Server Forms beta) → renders via GTDeclarativeFormView → submits the
+  /// generic envelope (formType from the package) to the generic endpoint.
+  Future<void> _openDeclaredForm(FormDefinitionSummary form) async {
+    if (_openingDeclaredId != null) return;
+    setState(() => _openingDeclaredId = form.id);
+
+    final navigator = Navigator.of(context);
+    try {
+      final package = form.id.isNotEmpty
+          ? await _catalog.fetchDefinition(id: form.id)
+          : await _catalog.fetchDefinition(formType: form.formType);
+
+      if (!mounted) return;
+      navigator.push(
+        MaterialPageRoute(
+          builder: (_) => ServerFormRenderScreen(
+            package: package,
+            submissionService: GenericFormSubmissionService(),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ApmFeedback.error(
+        context,
+        'Could not open that form. See logs for details.',
+        category: 'GenericForms/Home',
+        logMessage: 'Declared form open failed id={Id}: {Error}',
+        logArgs: [form.id, e.toString()],
+      );
+    } finally {
+      if (mounted) setState(() => _openingDeclaredId = null);
+    }
   }
 
   Future<void> _openCrFromHome(BuildContext context) async {
@@ -212,6 +388,7 @@ class FormsHomeScreen extends StatelessWidget {
     required IconData icon,
     required Color color,
     required VoidCallback onTap,
+    Widget? trailing,
   }) {
     return Card(
       child: InkWell(
@@ -248,7 +425,7 @@ class FormsHomeScreen extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right),
+              trailing ?? const Icon(Icons.chevron_right),
             ],
           ),
         ),

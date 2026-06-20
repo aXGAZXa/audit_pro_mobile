@@ -1,6 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 
 class SiteDetailsScreen extends StatefulWidget {
   final Map<String, dynamic> formData;
@@ -10,7 +11,7 @@ class SiteDetailsScreen extends StatefulWidget {
   final VoidCallback? onObservationsChanged;
   final bool Function(String)? hasObservations;
   final bool hidePropertyType;
-  final bool isWebEditorMode;
+  final FormRepository? repo;
 
   const SiteDetailsScreen({
     super.key,
@@ -21,7 +22,7 @@ class SiteDetailsScreen extends StatefulWidget {
     this.onObservationsChanged,
     this.hasObservations,
     this.hidePropertyType = false,
-    this.isWebEditorMode = false,
+    this.repo,
   });
 
   @override
@@ -50,17 +51,22 @@ class _SiteDetailsScreenState extends State<SiteDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.isWebEditorMode) {
-      _initializeWebEditorCollections();
-    } else {
-      _loadCollections();
-    }
+    _loadReferenceData();
     // Load existing form data if any
     _uprpnEnabled = widget.formData['uprpnEnabled'] ?? false;
     _uprpnController.text = widget.formData['uprpn'] ?? '';
-    _auditDate = widget.formData['auditDate'] ?? DateTime.now();
-    _selectedClient = widget.formData['client'];
-    _selectedPropertyType = widget.formData['propertyType'];
+    // formData carries JSON-native types: on web the editor payload supplies
+    // auditDate as a String ("2025-12-10"); on mobile it may already be a
+    // DateTime. Coerce either shape so the date picker never receives a String.
+    _auditDate = _coerceDate(widget.formData['auditDate']) ?? DateTime.now();
+    // Normalize empty -> null so the dropdowns never carry a value-not-in-items
+    // (an empty string is non-null but won't be seeded into the item list).
+    final clientValue = (widget.formData['client'] ?? '').toString().trim();
+    _selectedClient = clientValue.isEmpty ? null : clientValue;
+    final propertyTypeValue = (widget.formData['propertyType'] ?? '')
+        .toString()
+        .trim();
+    _selectedPropertyType = propertyTypeValue.isEmpty ? null : propertyTypeValue;
     _siteNameController.text = widget.formData['siteName'] ?? '';
     _streetAddressController.text = widget.formData['streetAddress'] ?? '';
     _townCityController.text = widget.formData['townCity'] ?? '';
@@ -69,37 +75,48 @@ class _SiteDetailsScreenState extends State<SiteDetailsScreen> {
         widget.formData['propertyTypeOther'] ?? '';
   }
 
-  void _initializeWebEditorCollections() {
-    final selectedClient = (widget.formData['client'] ?? '').toString().trim();
-    final selectedPropertyType = (widget.formData['propertyType'] ?? '')
-        .toString()
-        .trim();
-
-    final clients = <String>[];
-    if (selectedClient.isNotEmpty) clients.add(selectedClient);
-
-    final propertyTypes = <String>[];
-    if (selectedPropertyType.isNotEmpty)
-      propertyTypes.add(selectedPropertyType);
-    if (!propertyTypes.contains('Other')) propertyTypes.add('Other');
-
-    _clients = clients;
-    _propertyTypes = propertyTypes;
-    _isLoadingData = false;
-  }
-
-  Future<void> _loadCollections() async {
+  /// Reference data via the injected repo — ONE path for both platforms
+  /// (mobile resolves from SQLite; web from the reference data bundled into the
+  /// editor payload). DatabaseHelper fallback only for a repo-less legacy caller.
+  Future<void> _loadReferenceData() async {
     try {
-      final db = DatabaseHelper.instance;
-      final clientsData = await db.getClients();
-      final propertyTypesData = await db.getPropertyTypes();
+      final repo = widget.repo;
+      final List<Map<String, dynamic>> clientsData;
+      final List<Map<String, dynamic>> propertyTypesData;
+      if (repo != null) {
+        clientsData = await repo.getReferenceCollection('clients');
+        propertyTypesData = await repo.getReferenceCollection('property_types');
+      } else {
+        final db = DatabaseHelper.instance;
+        clientsData = await db.getClients();
+        propertyTypesData = await db.getPropertyTypes();
+      }
 
+      final clients = clientsData
+          .map((c) => (c['name'] ?? '').toString())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      final propertyTypes = propertyTypesData
+          .map((p) => (p['name'] ?? '').toString())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      // Ensure the currently-selected values are present so the dropdowns never
+      // hit "value not in items" — e.g. editing a submission whose payload
+      // predates bundled referenceData, or a value since removed from the catalog.
+      final selectedClient = (widget.formData['client'] ?? '').toString().trim();
+      if (selectedClient.isNotEmpty && !clients.contains(selectedClient)) {
+        clients.insert(0, selectedClient);
+      }
+      final selectedType = (widget.formData['propertyType'] ?? '')
+          .toString()
+          .trim();
+      if (selectedType.isNotEmpty && !propertyTypes.contains(selectedType)) {
+        propertyTypes.insert(0, selectedType);
+      }
       if (!mounted) return;
       setState(() {
-        _clients = clientsData.map((c) => c['name'] as String).toList();
-        _propertyTypes = propertyTypesData
-            .map((p) => p['name'] as String)
-            .toList();
+        _clients = clients;
+        _propertyTypes = propertyTypes;
         _isLoadingData = false;
       });
     } catch (_) {
@@ -108,6 +125,16 @@ class _SiteDetailsScreenState extends State<SiteDetailsScreen> {
         _isLoadingData = false;
       });
     }
+  }
+
+  /// Accepts the two shapes auditDate can arrive in — a DateTime (mobile,
+  /// in-memory) or a String (web, straight from the JSON editor payload).
+  static DateTime? _coerceDate(dynamic value) {
+    if (value is DateTime) return value;
+    if (value is String && value.trim().isNotEmpty) {
+      return DateTime.tryParse(value.trim());
+    }
+    return null;
   }
 
   String _toCamelCase(String text) {
@@ -173,7 +200,10 @@ class _SiteDetailsScreenState extends State<SiteDetailsScreen> {
       // Save all form data
       widget.onDataChanged('uprpnEnabled', _uprpnEnabled);
       widget.onDataChanged('uprpn', _uprpnController.text);
-      widget.onDataChanged('auditDate', _auditDate);
+      // Write back a JSON-native String so the in-memory document stays
+      // serializable on web (buildFromFormSnapshot -> jsonEncode) and round-trips
+      // through _coerceDate on reload.
+      widget.onDataChanged('auditDate', _auditDate?.toIso8601String());
       widget.onDataChanged('client', _selectedClient);
       widget.onDataChanged('propertyType', _selectedPropertyType);
       widget.onDataChanged('siteName', _siteNameController.text);

@@ -7,6 +7,7 @@ import '../logging/apm_logger.dart';
 import '../apm/forms/condition_report/condition_report_definition.dart';
 import '../apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
 import '../apm/forms/heat_network_assessment/heat_network_assessment_screen.dart';
+import '../apm/forms/heat_network_assessment/hna_repository_factory.dart';
 import '../apm/forms/heat_network_assessment/services/hna_edit_requests_service.dart';
 import '../apm/forms/heat_network_assessment/services/hna_edit_session_snapshot_hydrator.dart';
 import '../apm/forms/services/forms_edit_sessions_service.dart';
@@ -259,7 +260,10 @@ class _SubmissionsScreenState extends State<SubmissionsScreen> {
       await Navigator.of(context).push(
         MaterialPageRoute(
           settings: const RouteSettings(name: '/hna'),
-          builder: (_) => HeatNetworkAssessmentScreen(formId: newFormId),
+          builder: (_) => HeatNetworkAssessmentScreen(
+            formId: newFormId,
+            repo: createHnaMobileRepository(),
+          ),
         ),
       );
 

@@ -2,16 +2,16 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
-import 'package:audit_pro_mobile/apm/database/database_helper.dart';
-import 'package:audit_pro_mobile/logging/apm_logger.dart';
 
 class HNASiteDetailsScreen extends StatefulWidget {
   final Map<String, dynamic> formData;
   final Function(String, dynamic) onDataChanged;
   final VoidCallback onNext;
   final int? formId;
-  final int clientsSyncNonce;
-  final List<String>? clientsOverride;
+
+  /// Client catalog, resolved by the parent via the injected repository
+  /// (SQLite on mobile, the editor payload on web) — one path for both.
+  final List<String> clients;
 
   const HNASiteDetailsScreen({
     super.key,
@@ -19,8 +19,7 @@ class HNASiteDetailsScreen extends StatefulWidget {
     required this.onDataChanged,
     required this.onNext,
     this.formId,
-    required this.clientsSyncNonce,
-    this.clientsOverride,
+    this.clients = const <String>[],
   });
 
   @override
@@ -53,11 +52,6 @@ class _HNASiteDetailsScreenState extends State<HNASiteDetailsScreen> {
   @override
   void initState() {
     super.initState();
-    ApmLogger.info(
-      'initState formId=${widget.formId} clientsSyncNonce=${widget.clientsSyncNonce}',
-      category: 'HNA/SiteDetails',
-    );
-    _loadCollections();
     // Load existing form data if any
     _uprpnEnabled = widget.formData['uprpnEnabled'] ?? false;
     _uprpnController.text = widget.formData['uprpn'] ?? '';
@@ -72,89 +66,44 @@ class _HNASiteDetailsScreenState extends State<HNASiteDetailsScreen> {
     _postcodeController.text = (widget.formData['postcode'] ?? '')
         .toString()
         .toUpperCase();
+    _applyClients(initial: true);
   }
 
   @override
   void didUpdateWidget(covariant HNASiteDetailsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.clientsSyncNonce != oldWidget.clientsSyncNonce) {
-      ApmLogger.info(
-        'clientsSyncNonce changed ${oldWidget.clientsSyncNonce} -> ${widget.clientsSyncNonce}',
-        category: 'HNA/SiteDetails',
-      );
-      _loadCollections();
+    if (!listEquals(widget.clients, oldWidget.clients)) {
+      _applyClients();
     }
   }
 
-  Future<void> _loadCollections() async {
-    // In the web editor, we may not have a local sqflite database available.
-    // Treat client list as best-effort; never block the form UI indefinitely.
-    List<Map<String, dynamic>> clientsData = [];
-
-    final override = widget.clientsOverride;
-    if (override != null) {
-      clientsData = override
-          .map((name) => {'name': name})
-          .toList(growable: false);
-    } else if (!kIsWeb) {
-      try {
-        final db = DatabaseHelper.instance;
-        final rows = await db.getClients();
-        clientsData = rows.map((e) => Map<String, dynamic>.from(e)).toList();
-
-        ApmLogger.info(
-          'Loaded clients from DB count=${clientsData.length} sample=${clientsData.take(5).map((c) => c['name']).toList()}',
-          category: 'HNA/SiteDetails',
-        );
-      } catch (e, st) {
-        ApmLogger.warning(
-          'Failed to load clients from local DB: {Error}',
-          args: [e.toString()],
-          category: 'HNA/SiteDetails',
-          error: e,
-          stackTrace: st,
-        );
-        clientsData = [];
-      }
-    }
-
-    if (!mounted) return;
-
-    final rawClients = clientsData
-        .map((c) => (c['name'] as String?)?.trim())
-        .where((name) => name != null && name.isNotEmpty)
-        .cast<String>()
-        .toList();
-
-    // DropdownButton asserts that there must be exactly one item matching the current value.
-    // Client sync can change the DB list while the form is still holding an older value.
-    // Make the UI resilient by ensuring:
-    //  - no duplicates
-    //  - if the current selection is no longer present (e.g. clients not yet synced), keep it
-    //    by adding it into the items list.
-    final normalized = rawClients.toSet().toList()..sort();
+  /// Build the dropdown's item list from the injected [clients], keeping the
+  /// current selection present even if the catalog doesn't contain it (so the
+  /// dropdown never hits "value not in items"). Resilient to the catalog
+  /// arriving after first build (async repo load).
+  void _applyClients({bool initial = false}) {
+    final normalized =
+        widget.clients
+            .map((c) => c.trim())
+            .where((c) => c.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
 
     final selected = _selectedClient?.trim();
     if (selected != null &&
         selected.isNotEmpty &&
         !normalized.contains(selected)) {
-      ApmLogger.info(
-        'Selected client not in synced list; keeping selection selected=$selected clients=${normalized.length}',
-        category: 'HNA/SiteDetails',
-      );
       normalized.add(selected);
       normalized.sort();
     }
 
-    final nextSelected = (selected != null && selected.isNotEmpty)
+    _clients = normalized;
+    _selectedClient = (selected != null && selected.isNotEmpty)
         ? selected
         : null;
-
-    setState(() {
-      _clients = normalized;
-      _selectedClient = nextSelected;
-      _isLoadingData = false;
-    });
+    _isLoadingData = false;
+    if (!initial && mounted) setState(() {});
   }
 
   String _toCamelCase(String text) {
@@ -308,7 +257,7 @@ class _HNASiteDetailsScreenState extends State<HNASiteDetailsScreen> {
                         },
                       ),
                       AppDropdown<String>(
-                        key: ValueKey(widget.clientsSyncNonce),
+                        key: ValueKey(_clients.length),
                         label: 'Client',
                         value: _selectedClient,
                         items: _clients.map((client) {

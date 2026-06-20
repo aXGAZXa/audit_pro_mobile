@@ -4,7 +4,9 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/condition_report/services/cr_observation_record.dart';
 import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/heat_network_assessment_definition.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:uuid/uuid.dart';
 
@@ -20,6 +22,12 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
   List<Map<String, dynamic>> _observations = [];
   bool _isLoading = true;
 
+  /// Injected I/O. When present (Condition Report flow), observations route
+  /// through the single-writer form document. When null (HNA / legacy callers),
+  /// the existing draft-JSON / DB paths are used UNCHANGED.
+  FormRepository? _repo;
+  bool get _useRepo => _repo != null;
+
   List<Map<String, dynamic>>? _observationsJsonArg;
   void Function(List<Map<String, dynamic>> next)? _onObservationsChangedArg;
 
@@ -33,6 +41,7 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
   String? _questionText;
   String? _sectionName;
   String? _assetId;
+  String? _assetUuid;
   String? _assetType;
   String? _assetMakeModel;
 
@@ -44,11 +53,16 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
         ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
     if (args != null) {
       _formId = args['formId'] as int?;
+      _repo = args['repo'] as FormRepository?;
       _questionReference = args['questionReference'] as String?;
       _questionText = args['questionText'] as String?;
       _sectionName = args['sectionName'] as String?;
       final rawAssetId = args['assetId'];
       _assetId = rawAssetId?.toString();
+      final rawAssetUuid = args['assetUuid'];
+      _assetUuid = (rawAssetUuid == null || rawAssetUuid.toString().isEmpty)
+          ? null
+          : rawAssetUuid.toString();
       _assetType = args['assetType'] as String?;
       _assetMakeModel = args['assetMakeModel'] as String?;
 
@@ -104,7 +118,17 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
     setState(() => _isLoading = true);
 
     try {
-      if (_useDraftJson) {
+      if (_useRepo) {
+        // Condition Report: observations live on the single-writer document.
+        final ref = (_questionReference ?? '').trim();
+        final all = await _repo!.getCollection('observations');
+        _observations = all.where((o) {
+          final oRef = (o['question_reference'] ?? o['questionReference'] ?? '')
+              .toString()
+              .trim();
+          return oRef == ref;
+        }).toList(growable: false);
+      } else if (_useDraftJson) {
         // Prefer in-memory list if provided by caller; otherwise read persisted draft.
         final list =
             _observationsJsonArg ??
@@ -218,6 +242,37 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
       final isUnsafe = observationData['is_unsafe'] as bool? ?? false;
       final unsafeClassification =
           observationData['unsafe_classification'] as String?;
+
+      if (_useRepo) {
+        // Condition Report: upsert into the single-writer document, preserving
+        // the exact stored shape via the shared record builder.
+        final existing = observationId != null
+            ? (await _repo!.getCollection('observations')).firstWhere(
+                (o) => o['id'] == observationId,
+                orElse: () => <String, dynamic>{},
+              )
+            : <String, dynamic>{};
+        await _repo!.saveCollectionItem(
+          'observations',
+          buildCrObservationRecord(
+            id: observationId,
+            formId: _formId ?? 0,
+            questionReference: _questionReference ?? '',
+            notes: observationData['notes'] as String?,
+            imagePaths: imagePaths ?? const <String>[],
+            questionText: _questionText,
+            sectionName: _sectionName,
+            assetId: int.tryParse((_assetId ?? '').toString()),
+            assetUuid: _assetUuid,
+            assetType: _assetType,
+            assetMakeModel: _assetMakeModel,
+            isUnsafe: isUnsafe,
+            unsafeClassification: unsafeClassification,
+            existing: existing.isEmpty ? null : existing,
+          ),
+        );
+        return;
+      }
 
       if (_useDraftJson) {
         if (_formId == null) {
@@ -376,6 +431,15 @@ class _ObservationsListScreenState extends State<ObservationsListScreen> {
 
     if (confirmed == true) {
       try {
+        if (_useRepo) {
+          await _repo!.deleteCollectionItem(
+            'observations',
+            observation['id'] as Object,
+          );
+          await _loadObservations();
+          return;
+        }
+
         if (_useDraftJson) {
           if (_formId == null) {
             final all = (_observationsJsonArg ?? <Map<String, dynamic>>[])

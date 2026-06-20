@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../apm/forms/heat_network_assessment/heat_network_assessment_screen.dart'
     as ml;
+import '../../apm/forms/heat_network_assessment/hna_repository_factory.dart';
 
 class HeatNetworkAssessmentScreen extends StatelessWidget {
   const HeatNetworkAssessmentScreen({
@@ -15,6 +16,10 @@ class HeatNetworkAssessmentScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ml.HeatNetworkAssessmentScreen(formId: formId, forceNew: forceNew);
+    return ml.HeatNetworkAssessmentScreen(
+      formId: formId,
+      forceNew: forceNew,
+      repo: createHnaMobileRepository(),
+    );
   }
 }

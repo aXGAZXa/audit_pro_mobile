@@ -6,6 +6,7 @@ import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:audit_pro_mobile/apm/forms/shared/editor/form_draft_persistence_service.dart';
 import 'package:audit_pro_mobile/apm/services/platform/image_persistence.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 
 /// Mobile [FormRepository]. The form's top-level fields live in the on-device
 /// draft's `form_data` blob; **collections bridge to the existing typed SQLite
@@ -21,14 +22,16 @@ class SqliteFormRepository implements FormRepository {
   SqliteFormRepository({
     DatabaseHelper? db,
     FormDraftPersistenceService? drafts,
-    Future<String?> Function(int formId)? submitter,
+    Future<String?> Function(int formId, Map<String, dynamic> formData)?
+        submitter,
   })  : _db = db ?? DatabaseHelper.instance,
         _drafts = drafts ?? FormDraftPersistenceService(),
         _submitter = submitter;
 
   final DatabaseHelper _db;
   final FormDraftPersistenceService _drafts;
-  final Future<String?> Function(int formId)? _submitter;
+  final Future<String?> Function(int formId, Map<String, dynamic> formData)?
+      _submitter;
 
   String _formType = '';
   int _formId = 0;
@@ -89,6 +92,16 @@ class SqliteFormRepository implements FormRepository {
     return value;
   }
 
+  /// Mint a stable UUID reconciliation key (additive to `id`) when an item
+  /// lacks one; preserve the existing item's UUID on update. This is the seam
+  /// the server feature uses to project/edit models (Capture & Projection).
+  static void _ensureUuid(Map<String, dynamic> item, {Object? existing}) {
+    if ((item['uuid'] ?? '').toString().isNotEmpty) return;
+    final existingUuid =
+        existing is Map ? (existing['uuid'] ?? '').toString() : '';
+    item['uuid'] = existingUuid.isNotEmpty ? existingUuid : const Uuid().v4();
+  }
+
   @override
   Future<void> flushDraft() =>
       _drafts.flush(formType: _formType, formId: _formId);
@@ -97,9 +110,15 @@ class SqliteFormRepository implements FormRepository {
 
   @override
   Future<List<Map<String, dynamic>>> getCollection(String collection) async {
-    final bridged = await _readBridged(collection);
-    if (bridged != null) return bridged;
-    // Not-yet-bridged collection: serve from the blob.
+    // Derived view: "unsafe observations" are observations flagged is_unsafe —
+    // not a stored collection. Everything else is a list-valued key on the doc.
+    if (collection == 'unsafeObservations') {
+      return _readData('observations').where(_isUnsafeRow).toList();
+    }
+    return _readData(collection);
+  }
+
+  List<Map<String, dynamic>> _readData(String collection) {
     final raw = _data[collection];
     if (raw is! List) return <Map<String, dynamic>>[];
     return raw
@@ -108,15 +127,9 @@ class SqliteFormRepository implements FormRepository {
         .toList();
   }
 
-  Future<List<Map<String, dynamic>>?> _readBridged(String collection) async {
-    switch (collection) {
-      case 'observations':
-        return _db.getFormObservations(_formId);
-      case 'unsafeObservations':
-        return _db.getUnsafeObservations(_formId);
-      default:
-        return null; // not yet bridged — fall back to the blob
-    }
+  static bool _isUnsafeRow(Map<String, dynamic> o) {
+    final f = o['is_unsafe'];
+    return f == true || f == 1 || f?.toString() == '1';
   }
 
   @override
@@ -146,54 +159,32 @@ class SqliteFormRepository implements FormRepository {
     String collection,
     Map<String, dynamic> item,
   ) async {
-    switch (collection) {
-      case 'observations':
-        final id = await _db.saveObservation(
-          formId: _formId,
-          questionReference:
-              (item['question_reference'] ?? item['questionReference'] ?? '')
-                  .toString(),
-          notes: (item['notes'] as String?)?.trim().isEmpty ?? true
-              ? null
-              : item['notes'] as String?,
-          imagePaths:
-              (item['images'] ?? item['imagePaths']) is List
-                  ? List<String>.from(
-                      (item['images'] ?? item['imagePaths']) as List)
-                  : null,
-        );
-        return id;
-      default:
-        // Not-yet-bridged collection: keep it in the blob.
-        final list = _data[collection] is List
-            ? List<dynamic>.from(_data[collection] as List)
-            : <dynamic>[];
-        final next = Map<String, dynamic>.from(item);
-        final id = next['id'] ?? (list.length + 1);
-        next['id'] = id;
-        final idx = list.indexWhere((e) => e is Map && e['id'] == id);
-        if (idx >= 0) {
-          list[idx] = next;
-        } else {
-          list.add(next);
-        }
-        _data[collection] = list;
-        await saveDraft();
-        return id;
+    // Generic single-writer upsert into the in-memory document. ALL collections
+    // (observations, assets, plantRooms, …) live here now — no DB bridge, so
+    // there is exactly one writer and the main-screen autosave can't clobber.
+    final list = _data[collection] is List
+        ? List<dynamic>.from(_data[collection] as List)
+        : <dynamic>[];
+    final next = Map<String, dynamic>.from(item);
+    final id = next['id'] ?? (list.length + 1);
+    next['id'] = id;
+    final idx = list.indexWhere((e) => e is Map && e['id'] == id);
+    _ensureUuid(next, existing: idx >= 0 ? list[idx] : null);
+    if (idx >= 0) {
+      list[idx] = next;
+    } else {
+      list.add(next);
     }
+    _data[collection] = list;
+    await saveDraft();
+    return id;
   }
 
   @override
   Future<void> deleteCollectionItem(String collection, Object id) async {
-    switch (collection) {
-      case 'observations':
-        if (id is int) await _db.deleteObservation(id);
-        return;
-      default:
-        final raw = _data[collection];
-        if (raw is List) raw.removeWhere((e) => e is Map && e['id'] == id);
-        await saveDraft();
-    }
+    final raw = _data[collection];
+    if (raw is List) raw.removeWhere((e) => e is Map && e['id'] == id);
+    await saveDraft();
   }
 
   // --- images ----------------------------------------------------------------
@@ -226,10 +217,28 @@ class SqliteFormRepository implements FormRepository {
       throw StateError('SqliteFormRepository was constructed without a submitter');
     }
     await flushDraft();
-    return submitter(_formId);
+    // Submit from the in-memory document (the single source of truth), not the
+    // relational tables. The injected submitter is the only form-specific seam
+    // (it serializes this form's envelope + knows its endpoint).
+    return submitter(_formId, _data);
   }
 
   // --- reference data --------------------------------------------------------
+
+  @override
+  Future<List<Map<String, dynamic>>> getReferenceCollection(String name) async {
+    switch (name) {
+      case 'asset_types':
+        return _db.getAssetTypes();
+      case 'property_types':
+        return _db.getPropertyTypes();
+      case 'clients':
+        return _db.getClients();
+      default:
+        // Generic reference/lookup tables (e.g. asset_statuses).
+        return _db.getCollectionItems(name);
+    }
+  }
 
   @override
   Future<List<String>> getClients() async {

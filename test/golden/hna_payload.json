@@ -1,0 +1,229 @@
+{
+  "form": {
+    "createdAt": "<volatile>",
+    "formType": "heat_network_assessment",
+    "id": "<formId>",
+    "status": "draft",
+    "updatedAt": "<volatile>",
+    "uuid": "hna-uuid-fixed-0001"
+  },
+  "hna": {
+    "assets": {
+      "communalControls": [],
+      "dhwPlants": [],
+      "dwellingInspections": [],
+      "heatGenerators": [],
+      "heatMeters": [
+        {
+          "id": "hm-1",
+          "imagePaths": [
+            "hm_1.jpg"
+          ],
+          "location": "Plant Room",
+          "make": "Kamstrup",
+          "model": "Multical 403"
+        }
+      ],
+      "plateHeatExchangers": []
+    },
+    "attachments": [
+      {
+        "contentType": "image/jpeg",
+        "id": "att_0001",
+        "links": [
+          {
+            "field": "imagePaths",
+            "ownerId": "hm-1",
+            "ownerType": "heat_meter",
+            "role": "photo"
+          }
+        ],
+        "localPath": "hm_1.jpg"
+      },
+      {
+        "contentType": "image/jpeg",
+        "id": "att_0002",
+        "links": [
+          {
+            "field": "imagePaths",
+            "ownerId": "obs-1",
+            "ownerType": "observation",
+            "role": "photo_general"
+          }
+        ],
+        "localPath": "obs_1.jpg"
+      }
+    ],
+    "formData": {
+      "auditDate": "2025-12-10",
+      "auditorName": "Jane Assessor",
+      "client": "Acme Housing",
+      "derivedMetrics": {
+        "assistedLivingIndicators": 0,
+        "billingImplicationFlag": "not_applicable",
+        "buildingUseCases": "",
+        "computedAt": "<volatile>",
+        "dwellingDhwMeterFeasibility": "N/A",
+        "dwellingHeatingMeterFeasibility": "N/A",
+        "dwellingMeteringFeasibility": "N/A",
+        "hasDwellingMeterEvidence": false,
+        "isHeatNetwork": false,
+        "meteringProvided": "not_applicable",
+        "methodologyVersion": "v1",
+        "networkCategory": null,
+        "networkClassification": "",
+        "nonOperationalPlantAssetCount": 0,
+        "numberOfDwellingsInspected": 0,
+        "observationCount": 1,
+        "plantInPoorCondition": 0,
+        "schemaVersion": 4,
+        "unsafeCount": 0
+      },
+      "pdfDerived": {
+        "computedAt": "<volatile>",
+        "meteringMessages": [],
+        "methodologyVersion": "v1",
+        "schemaVersion": 1,
+        "triageConfidenceAndLimitations": "This summary is based on a visual site inspection and the information reasonably visible or accessible on the day. Where building age and network age are stated, they reflect recorded estimates. It does not constitute a detailed technical assessment, compliance determination, or performance review. No dwellings were recorded for this site; dwelling sampling is not applicable.",
+        "triageDwellingConsistencySignals": [
+          "No dwellings were recorded for this site; dwelling sampling is not applicable."
+        ],
+        "triageMeteringRiskSignals": [
+          "This site was recorded as not meeting the heat network definition; heat network metering requirements do not apply. Monitor for regulatory changes and reassess if new evidence supports reclassification as a heat network."
+        ],
+        "triageNetworkCategory": "",
+        "triageNetworkCategoryMeaning": "",
+        "triageNetworkClassificationSummary": "This site was recorded as not meeting the heat network definition.",
+        "triageRegulatoryPreparednessSignals": [
+          "Follow-on: issues were recorded in the inspection observations; review, investigate, and rectify these items as appropriate. Monitor for regulatory changes and reassess classification if new evidence supports reclassification as a heat network."
+        ],
+        "triageStrategicFramingFlags": [
+          "Asset issues recorded"
+        ],
+        "triageVisualCaveatStatement": ""
+      },
+      "siteName": "Riverside Court"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "imagePaths": [
+          "obs_1.jpg"
+        ],
+        "is_unsafe": false,
+        "notes": "Minor corrosion noted.",
+        "questionReference": "HNA.SITE.01"
+      }
+    ],
+    "pdfModel": {
+      "AreDwellingArrangementsConsistent": false,
+      "AreDwellingInspectionsPossible": false,
+      "AssessorName": "Jane Assessor",
+      "AssessorSignatureBase64": "",
+      "BlockMeters": [],
+      "BuildingNature": [],
+      "BuildingNatureOther": "",
+      "BulkMeters": [
+        {
+          "AgeRange": "",
+          "Condition": "Not operational",
+          "Id": "hm-1",
+          "Images": [
+            "att_0001"
+          ],
+          "Location": "Plant Room",
+          "Make": "Kamstrup",
+          "MeterType": "",
+          "Model": "Multical 403",
+          "NetworkType": "",
+          "Reading": "",
+          "SerialNumber": "",
+          "Units": ""
+        }
+      ],
+      "ClientName": "Acme Housing",
+      "CommunalControls": [],
+      "CommunalPipeworkInsulationStatement": "",
+      "CommunalPipeworkQuestion": "Communal pipework insulation",
+      "CommunalPipeworkReason": "",
+      "DedicatedCommunalDhwPlant": "",
+      "DedicatedCommunalDhwPlantQuestion": "Dedicated communal DHW plant",
+      "DedicatedCommunalDhwPlantUnknownReason": "",
+      "DhwPlants": [],
+      "DwellingArrangementsConsistent": "Unverified",
+      "DwellingConsistencyQuestion": "Are dwelling arrangements consistent?",
+      "DwellingInspectionAccessQuestion": "Were dwelling inspections possible?",
+      "DwellingInspections": [],
+      "DwellingTypes": [],
+      "EstimatedBuildingAge": "",
+      "EstimatedNetworkAge": "",
+      "HasBlockMeters": false,
+      "HasBulkMeter": false,
+      "HasSiteRepSignature": false,
+      "HeatGenerators": [],
+      "HeatSuppliedUnclearDetails": "",
+      "HideDwellingInspectionsSection": true,
+      "HideMeteringSection": false,
+      "InspectionDate": "10/12/2025",
+      "IsCommunalNetwork": false,
+      "IsDistrictNetwork": false,
+      "IsHeatNetwork": false,
+      "IsResidential": false,
+      "MaxFloors": "0",
+      "MeetsHeatNetworkDefinitionRaw": "",
+      "MeteringMessages": [],
+      "NetworkDefinitionLabel": "",
+      "NumBlocks": "0",
+      "NumDwellings": "0",
+      "Phexes": [],
+      "Postcode": "",
+      "ReportNumber": "HNA-260101-1200-HNA",
+      "ShowGenerators": true,
+      "ShowSupportedFacilities": false,
+      "SignatureDate": "10/12/2025",
+      "SiteName": "Riverside Court",
+      "SiteRepName": "",
+      "SiteRepSignatureBase64": "",
+      "StreetAddress": "",
+      "SupportedFacilities": [],
+      "SupportedFacilitiesOther": "",
+      "TownCity": "",
+      "TriageConfidenceAndLimitations": "This summary is based on a visual site inspection and the information reasonably visible or accessible on the day. Where building age and network age are stated, they reflect recorded estimates. It does not constitute a detailed technical assessment, compliance determination, or performance review. No dwellings were recorded for this site; dwelling sampling is not applicable.",
+      "TriageDwellingConsistencySignals": [
+        "No dwellings were recorded for this site; dwelling sampling is not applicable."
+      ],
+      "TriageMeteringRiskSignals": [
+        "This site was recorded as not meeting the heat network definition; heat network metering requirements do not apply. Monitor for regulatory changes and reassess if new evidence supports reclassification as a heat network."
+      ],
+      "TriageNetworkCategory": "",
+      "TriageNetworkCategoryMeaning": "",
+      "TriageNetworkClassificationSummary": "This site was recorded as not meeting the heat network definition.",
+      "TriageRegulatoryPreparednessSignals": [
+        "Follow-on: issues were recorded in the inspection observations; review, investigate, and rectify these items as appropriate. Monitor for regulatory changes and reassess classification if new evidence supports reclassification as a heat network."
+      ],
+      "TriageStrategicFramingFlags": [
+        "Asset issues recorded"
+      ],
+      "TriageVisualCaveatStatement": "",
+      "UPRPN": "",
+      "UPRPNEnabled": false,
+      "UnsafeReports": [],
+      "UnsafeSituations": []
+    },
+    "summary": {
+      "assessorName": "Jane Assessor",
+      "auditDate": "2025-12-10",
+      "clientName": "Acme Housing",
+      "formId": "<formId>",
+      "formUuid": "hna-uuid-fixed-0001",
+      "friendlyRef": "HNA-260101-1200-HNA",
+      "submittedAt": "2026-01-01T12:00:00.000Z"
+    },
+    "unsafe": {
+      "unreportedUnsafeObservations": [],
+      "unsafeObservations": [],
+      "unsafeReports": []
+    }
+  },
+  "payloadSchemaVersion": 4
+}

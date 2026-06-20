@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -15,12 +16,17 @@ class UnsafeDetailsScreen extends StatefulWidget {
   final VoidCallback onBack;
   final VoidCallback onSave;
 
+  /// Injected I/O (Condition Report). When present, the report is written
+  /// through the single-writer document; reads (derived) stay on DatabaseHelper.
+  final FormRepository? repo;
+
   const UnsafeDetailsScreen({
     super.key,
     required this.formId,
     this.reportId,
     required this.onBack,
     required this.onSave,
+    this.repo,
   });
 
   @override
@@ -245,16 +251,51 @@ class _UnsafeDetailsScreenState extends State<UnsafeDetailsScreen> {
     setState(() => _isSaving = true);
 
     try {
-      await DatabaseHelper.instance.saveUnsafeReport(
-        id: widget.reportId,
-        formId: widget.formId,
-        actionTaken: _actionTakenController.text.trim(),
-        warningNoticeImage: _warningNoticeImagePath,
-        afterImage: _afterImagePath,
-        reportedToClient: _reportedToClientController.text.trim(),
-        reportedInternally: _reportedInternallyController.text.trim(),
-        observationIds: _selectedObservationIds.toList(),
-      );
+      final repo = widget.repo;
+      if (repo != null) {
+        // Single-writer: upsert the report into the form document, preserving
+        // the exact shape DatabaseHelper.saveUnsafeReport produces.
+        final reportId = widget.reportId;
+        final existing = reportId != null
+            ? await repo.getCollectionItem('unsafeReports', reportId)
+            : null;
+        final ids = _selectedObservationIds.toList();
+        // Stable cross-environment FK: link selected observations by their
+        // UUID (additive to the local int observation_ids) so the server can
+        // reconcile by a key that survives edits / re-projection / devices.
+        final observationUuids = _allUnsafeObservations
+            .where((o) => _selectedObservationIds.contains(o['id']))
+            .map((o) => (o['uuid'] ?? '').toString())
+            .where((u) => u.isNotEmpty)
+            .toList();
+        final now = DateTime.now().toIso8601String();
+        await repo.saveCollectionItem('unsafeReports', <String, dynamic>{
+          ...?existing,
+          if (reportId != null) 'id': reportId,
+          'form_id': widget.formId,
+          'action_taken': _actionTakenController.text.trim(),
+          'warning_notice_image': _warningNoticeImagePath,
+          'after_image': _afterImagePath,
+          'reported_to_client': _reportedToClientController.text.trim(),
+          'reported_internally': _reportedInternallyController.text.trim(),
+          'observation_ids': ids,
+          'observation_uuids': observationUuids,
+          'observation_count': ids.length,
+          'created_at': existing?['created_at'] ?? now,
+          'updated_at': now,
+        });
+      } else {
+        await DatabaseHelper.instance.saveUnsafeReport(
+          id: widget.reportId,
+          formId: widget.formId,
+          actionTaken: _actionTakenController.text.trim(),
+          warningNoticeImage: _warningNoticeImagePath,
+          afterImage: _afterImagePath,
+          reportedToClient: _reportedToClientController.text.trim(),
+          reportedInternally: _reportedInternallyController.text.trim(),
+          observationIds: _selectedObservationIds.toList(),
+        );
+      }
 
       if (mounted) {
         widget.onSave();

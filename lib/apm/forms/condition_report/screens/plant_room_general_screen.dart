@@ -1,7 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
-import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 
 class PlantRoomGeneralScreen extends StatefulWidget {
@@ -16,6 +16,7 @@ class _PlantRoomGeneralScreenState extends State<PlantRoomGeneralScreen> {
 
   int? _formId;
   int? _plantRoomId;
+  FormRepository? _repo;
 
   String? _pg1SafeAccess;
   String? _pg2Secure;
@@ -47,6 +48,7 @@ class _PlantRoomGeneralScreenState extends State<PlantRoomGeneralScreen> {
     if (args != null) {
       _formId = args['formId'] as int?;
       _plantRoomId = args['plantRoomId'] as int?;
+      _repo = args['repo'] as FormRepository?;
 
       if (_plantRoomId != null) {
         _loadResponses();
@@ -57,9 +59,10 @@ class _PlantRoomGeneralScreenState extends State<PlantRoomGeneralScreen> {
   Future<void> _loadResponses() async {
     if (_plantRoomId == null) return;
 
-    final responses = await DatabaseHelper.instance.getPlantRoomResponses(
-      _plantRoomId!,
-    );
+    final item = await _repo?.getCollectionItem('plantRooms', _plantRoomId!);
+    final responses = (item?['responses'] is Map)
+        ? Map<String, dynamic>.from(item!['responses'] as Map)
+        : <String, dynamic>{};
     if (mounted) {
       setState(() {
         _pg1SafeAccess = responses['pg1SafeAccess'];
@@ -115,19 +118,27 @@ class _PlantRoomGeneralScreenState extends State<PlantRoomGeneralScreen> {
       return;
     }
 
-    await DatabaseHelper.instance.savePlantRoomResponses(
-      plantRoomId: _plantRoomId!,
-      responses: {
-        'pg1SafeAccess': _pg1SafeAccess,
-        'pg2Secure': _pg2Secure,
-        'pg3Labelled': _pg3Labelled,
-        'pg4AtexLabelling': _pg4AtexLabelling,
-        'pg5CanUnlock': _pg5CanUnlock,
-        'pg6FreeOfStoredItems': _pg6FreeOfStoredItems,
-        'pg7CleanAndTidy': _pg7CleanAndTidy,
-        'pg8MaintenanceFile': _pg8MaintenanceFile,
-      },
-    );
+    final existingItem =
+        await _repo?.getCollectionItem('plantRooms', _plantRoomId!) ??
+        <String, dynamic>{};
+    final existingResponses = (existingItem['responses'] is Map)
+        ? Map<String, dynamic>.from(existingItem['responses'] as Map)
+        : <String, dynamic>{};
+    final newResponses = <String, dynamic>{
+      'pg1SafeAccess': _pg1SafeAccess,
+      'pg2Secure': _pg2Secure,
+      'pg3Labelled': _pg3Labelled,
+      'pg4AtexLabelling': _pg4AtexLabelling,
+      'pg5CanUnlock': _pg5CanUnlock,
+      'pg6FreeOfStoredItems': _pg6FreeOfStoredItems,
+      'pg7CleanAndTidy': _pg7CleanAndTidy,
+      'pg8MaintenanceFile': _pg8MaintenanceFile,
+    };
+    await _repo?.saveCollectionItem('plantRooms', <String, dynamic>{
+      ...existingItem,
+      'id': _plantRoomId,
+      'responses': {...existingResponses, ...newResponses},
+    });
 
     if (mounted) {
       Navigator.pop(context);

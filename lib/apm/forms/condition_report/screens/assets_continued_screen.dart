@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:image_picker/image_picker.dart';
 
 class AssetsContinuedScreen extends StatefulWidget {
@@ -8,6 +9,7 @@ class AssetsContinuedScreen extends StatefulWidget {
   final VoidCallback onNext;
   final VoidCallback onBack;
   final int? formId;
+  final FormRepository? repo;
   final VoidCallback? onObservationsChanged;
   final bool Function(String)? hasObservations;
 
@@ -18,6 +20,7 @@ class AssetsContinuedScreen extends StatefulWidget {
     required this.onNext,
     required this.onBack,
     this.formId,
+    this.repo,
     this.onObservationsChanged,
     this.hasObservations,
   });
@@ -118,6 +121,7 @@ class _AssetsContinuedScreenState extends State<AssetsContinuedScreen> {
                         },
                         maxImages: 999,
                         formId: widget.formId,
+                        repo: widget.repo,
                         hasObservations:
                             widget.hasObservations?.call(
                               'applianceFlueSystems',
@@ -142,6 +146,7 @@ class _AssetsContinuedScreenState extends State<AssetsContinuedScreen> {
                           });
                         },
                         formId: widget.formId,
+                        repo: widget.repo,
                         hasObservations:
                             widget.hasObservations?.call('heatMeters') ?? false,
                         onObservationsChanged: widget.onObservationsChanged,
@@ -158,6 +163,7 @@ class _AssetsContinuedScreenState extends State<AssetsContinuedScreen> {
                           onAnswerChanged: (value) =>
                               setState(() => _heatMetersOperational = value),
                           formId: widget.formId,
+                          repo: widget.repo,
                           hasObservations:
                               widget.hasObservations?.call(
                                 'heatMetersOperational',

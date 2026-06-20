@@ -29,23 +29,39 @@ class CrSubmissionService {
 
   static const String _submissionSummaryKey = 'submissionSummary';
 
-  Future<String?> submitForm({required int formId}) async {
+  Future<String?> submitForm({
+    required int formId,
+    required Map<String, dynamic> formSnapshot,
+  }) async {
     final token = await tokenStore.getAccessToken();
     if (token == null || token.trim().isEmpty) {
       throw PortalApiException('You are not signed in.');
     }
 
+    final form = await db.getForm(formId);
+    if (form == null) {
+      throw PortalApiException('Form not found.');
+    }
+
     final attemptAt = DateTime.now().toUtc();
     await _recordSubmitAttempt(formId: formId, attemptAt: attemptAt);
 
-    final payload = await CrSubmissionPayloadBuilder.build(
+    // Serialize from the in-memory document (Capture & Projection), not the
+    // relational tables. Proven byte-identical to the old build() path by
+    // cr_mobile_snapshot_equivalence_test + cr_app_web_crosscheck.
+    final payload = CrSubmissionPayloadBuilder.buildFromFormSnapshot(
+      formSnapshot: CrSubmissionPayloadBuilder.assembleSnapshot(formSnapshot),
       formId: formId,
-      db: db,
+      formUuid: (form['uuid'] ?? '').toString(),
       submittedAt: attemptAt,
     );
-    if (payload == null) {
-      throw PortalApiException('Form not found.');
-    }
+
+    // Bundle tenant reference data (catalog) into the payload so the web editor
+    // — which has no on-device DB — can render the full asset-type/status
+    // dropdowns and run the app's real AddAssetScreen. Done here in the submit
+    // wrapper (NOT in the payload builder) so build()/buildFromFormSnapshot stay
+    // equal. Still dumb JSON; the server stores it opaquely.
+    await _injectReferenceData(payload);
 
     final appVersion = await appInfoService.getCurrentVersion();
 
@@ -103,6 +119,21 @@ class CrSubmissionService {
     );
 
     return responseId;
+  }
+
+  Future<void> _injectReferenceData(Map<String, dynamic> payload) async {
+    final cr = payload['conditionReport'];
+    if (cr is! Map) return;
+    try {
+      cr['referenceData'] = <String, dynamic>{
+        'asset_types': await db.getAssetTypes(),
+        'asset_statuses': await db.getCollectionItems('asset_statuses'),
+        'property_types': await db.getPropertyTypes(),
+        'clients': await db.getClients(),
+      };
+    } catch (_) {
+      // Reference data is best-effort; never block a submit on it.
+    }
   }
 
   String? _tryReadClientResponseId(Map<String, dynamic> payload) {

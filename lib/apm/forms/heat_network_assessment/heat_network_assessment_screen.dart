@@ -1,15 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
-import 'package:audit_pro_mobile/apm/database/database_helper.dart';
-import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/services/hna_reference_data_service.dart';
-import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/services/hna_submission_service.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:audit_pro_mobile/logging/apm_logger.dart';
 import 'package:audit_pro_mobile/logging/apm_feedback.dart';
-import 'package:audit_pro_mobile/apm/services/app_info_service.dart';
-import 'package:audit_pro_mobile/apm/services/auth_token_store.dart';
-import 'package:audit_pro_mobile/apm/services/portal_api_client.dart';
-import 'package:audit_pro_mobile/apm/config/api_config.dart';
-import 'package:audit_pro_mobile/apm/forms/shared/editor/form_draft_persistence_service.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/editor/form_draft_persistence_service.dart'
+    show FormSavePolicy;
 import 'heat_network_assessment_definition.dart';
 import 'screens/hna_site_details_screen.dart';
 import 'screens/development_details_screen.dart';
@@ -21,13 +16,24 @@ import 'screens/hna_summary_signature_screen.dart';
 import 'screens/hna_unsafe_situations_screen.dart';
 
 class HeatNetworkAssessmentScreen extends StatefulWidget {
+  /// Injected I/O. The entry point chooses the implementation
+  /// (SqliteFormRepository on mobile, WebFormRepository in the web editor) —
+  /// no environment branching inside the screen.
+  final FormRepository repo;
   final int? formId;
   final bool forceNew;
 
+  /// Called after a successful submit when the host needs to take over
+  /// navigation (web editor: notify parent / close iframe). Null on mobile,
+  /// where the screen pops itself.
+  final Future<void> Function()? onCompleted;
+
   const HeatNetworkAssessmentScreen({
     super.key,
+    required this.repo,
     this.formId,
     this.forceNew = false,
+    this.onCompleted,
   });
 
   @override
@@ -38,27 +44,18 @@ class HeatNetworkAssessmentScreen extends StatefulWidget {
 class _HeatNetworkAssessmentScreenState
     extends State<HeatNetworkAssessmentScreen> {
   final PageController _pageController = PageController();
-  final DatabaseHelper _db = DatabaseHelper.instance;
-  final FormDraftPersistenceService _draftPersistence =
-      FormDraftPersistenceService();
-  final HnaSubmissionService _submissionService = HnaSubmissionService(
-    tokenStore: AuthTokenStore(),
-    appInfoService: AppInfoService(),
-  );
+
+  FormRepository get _repo => widget.repo;
 
   int _currentPage = 0;
   int? _formId;
-  int _clientsSyncNonce = 0;
+  List<String> _clients = const <String>[];
 
   final Map<String, dynamic> _formData = {};
   final Map<String, dynamic> _draftDoc = {};
   Map<String, dynamic> _assetsJson = <String, dynamic>{};
   Map<String, dynamic> _unsafeJson = <String, dynamic>{};
   List<Map<String, dynamic>> _observationsJson = <Map<String, dynamic>>[];
-  bool _assetsDirty = false;
-  bool _unsafeDirty = false;
-  bool _observationsDirty = false;
-  int _saveGeneration = 0;
   bool _isLoading = true;
   static const FormSavePolicy _autosavePolicy = FormSavePolicy(
     debounce: Duration(milliseconds: 700),
@@ -81,28 +78,13 @@ class _HeatNetworkAssessmentScreenState
     _loadOrCreateForm();
   }
 
-  Future<void> _syncClientsBestEffort() async {
-    ApmLogger.info(
-      'Client sync start formId=$_formId baseUrl=${ApiConfig.portalBaseUrl}',
-      category: 'HNA/Startup',
-    );
+  Future<void> _loadClientsBestEffort() async {
     try {
-      final svc = HnaReferenceDataService(
-        tokenStore: AuthTokenStore(),
-        apiClient: PortalApiClient(baseUrl: ApiConfig.portalBaseUrl),
-        db: _db,
-      );
-      await svc.syncClientsIfSignedIn();
-      if (mounted) {
-        setState(() => _clientsSyncNonce++);
-        ApmLogger.info(
-          'Client sync complete formId=$_formId clientsSyncNonce=$_clientsSyncNonce',
-          category: 'HNA/Startup',
-        );
-      }
+      final clients = await _repo.getClients();
+      if (mounted) setState(() => _clients = clients);
     } catch (e, st) {
       ApmLogger.warning(
-        'Client sync failed formId=$_formId: {Error}',
+        'Client load failed formId=$_formId: {Error}',
         args: [e.toString()],
         category: 'HNA/Startup',
         error: e,
@@ -128,26 +110,24 @@ class _HeatNetworkAssessmentScreenState
         );
       }
 
-      final session = await _draftPersistence.loadOrCreate(
+      final session = await _repo.loadOrCreateDraft(
         formType: kHeatNetworkAssessmentFormType,
         explicitFormId: widget.formId,
         forceNew: widget.forceNew,
         allowLatestDraftFallback: false,
-        initialFormData: const <String, dynamic>{},
       );
       _formId = session.formId;
 
-      final converted = Map<String, dynamic>.from(
-        _convertFromSerializable(session.formData) as Map,
-      );
-      _hydrateFromDraftDoc(converted);
+      // The document lives in repo.formData (JSON-native). Hydrate the working
+      // copies the sub-screens read; persistence + serialization stay in the repo.
+      _hydrateFromDraftDoc(Map<String, dynamic>.from(_repo.formData));
 
       ApmLogger.info(
         'Loaded draft session formId=$_formId status=${session.status}',
         category: 'HNA/Startup',
       );
       if (mounted) setState(() => _isLoading = false);
-      await _syncClientsBestEffort();
+      await _loadClientsBestEffort();
     } catch (e, st) {
       ApmLogger.warning(
         'Error loading form: {Error}',
@@ -158,24 +138,6 @@ class _HeatNetworkAssessmentScreenState
       );
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  dynamic _convertFromSerializable(dynamic value) {
-    if (value is String) {
-      try {
-        if (RegExp(r'^\d{4}-\d{2}-\d{2}T').hasMatch(value)) {
-          return DateTime.parse(value);
-        }
-      } catch (_) {}
-    }
-    if (value is Map) {
-      return Map<String, dynamic>.fromEntries(
-        value.entries.map(
-          (e) => MapEntry(e.key.toString(), _convertFromSerializable(e.value)),
-        ),
-      );
-    }
-    return value;
   }
 
   dynamic _convertToSerializable(dynamic value) {
@@ -206,7 +168,6 @@ class _HeatNetworkAssessmentScreenState
 
   void _updateAssets(Map<String, dynamic> nextAssets) {
     setState(() {
-      _assetsDirty = true;
       _assetsJson = Map<String, dynamic>.from(nextAssets);
       _draftDoc[_assetsKey] = _assetsJson;
     });
@@ -215,7 +176,6 @@ class _HeatNetworkAssessmentScreenState
 
   void _updateUnsafe(Map<String, dynamic> nextUnsafe) {
     setState(() {
-      _unsafeDirty = true;
       _unsafeJson = Map<String, dynamic>.from(nextUnsafe);
       _draftDoc[_unsafeKey] = _unsafeJson;
     });
@@ -224,7 +184,6 @@ class _HeatNetworkAssessmentScreenState
 
   void _updateObservations(List<Map<String, dynamic>> nextObservations) {
     setState(() {
-      _observationsDirty = true;
       _observationsJson = nextObservations
           .map((e) => Map<String, dynamic>.from(e))
           .toList(growable: true);
@@ -308,28 +267,15 @@ class _HeatNetworkAssessmentScreenState
     FormSavePolicy savePolicy = const FormSavePolicy.immediate(),
   }) async {
     if (_formId == null) return;
-    final saveGen = ++_saveGeneration;
     try {
-      // Persist as a single aggregate doc: { formData, assets, ...meta }.
-      // Safety net: avoid overwriting persisted sections with stale in-memory
-      // values unless that section was actually modified in this parent.
+      // Single in-memory document: repo.formData is the one source of truth and
+      // this screen is its only writer (sub-screens flow back through the
+      // _update* callbacks), so there is no stale-overwrite to guard against.
+      // Start from the current document (preserves meta like submissionSummary /
+      // editSession) and overlay the working sections.
+      final docToSave = Map<String, dynamic>.from(_repo.formData);
 
-      // If any section is not dirty, prefer the latest persisted draft doc as
-      // the base to avoid clobbering child-screen writes.
-      Map<String, dynamic> baseDoc = Map<String, dynamic>.from(_draftDoc);
-      final shouldReloadBase =
-          !_assetsDirty || !_unsafeDirty || !_observationsDirty;
-      if (shouldReloadBase) {
-        final form = await _db.getForm(_formId!);
-        final raw = form != null ? form['form_data'] : null;
-        if (raw is Map) {
-          baseDoc = Map<String, dynamic>.from(raw);
-        }
-      }
-
-      final docToSave = Map<String, dynamic>.from(baseDoc);
-
-      // Preserve any in-memory non-managed meta keys (e.g. edit session info).
+      // Carry any in-memory non-managed meta keys (e.g. edit session info).
       for (final entry in _draftDoc.entries) {
         final key = entry.key.toString();
         if (key == _formDataKey ||
@@ -341,37 +287,25 @@ class _HeatNetworkAssessmentScreenState
         docToSave[key] = entry.value;
       }
 
-      // Always save current formData.
       docToSave[_formDataKey] = _formData;
+      docToSave[_assetsKey] = _assetsJson;
+      docToSave[_unsafeKey] = _unsafeJson;
+      docToSave[_observationsKey] = _observationsJson;
 
-      // Only overwrite these sections when changed here, or if missing.
-      if (_assetsDirty || !docToSave.containsKey(_assetsKey)) {
-        docToSave[_assetsKey] = _assetsJson;
-      }
-      if (_unsafeDirty || !docToSave.containsKey(_unsafeKey)) {
-        docToSave[_unsafeKey] = _unsafeJson;
-      }
-      if (_observationsDirty || !docToSave.containsKey(_observationsKey)) {
-        docToSave[_observationsKey] = _observationsJson;
-      }
+      // Keep the document JSON-native (dates as strings etc.) so the web submit
+      // path (buildFromFormSnapshot -> jsonEncode) never sees a DateTime.
+      final serialized = Map<String, dynamic>.from(
+        _convertToSerializable(docToSave) as Map,
+      );
+      _repo.formData
+        ..clear()
+        ..addAll(serialized);
 
-      final dataToSave = _convertToSerializable(docToSave);
-      await _draftPersistence.save(
-        formType: kHeatNetworkAssessmentFormType,
-        formId: _formId!,
+      await _repo.saveDraft(
         status: status,
-        formData: Map<String, dynamic>.from(dataToSave as Map),
         keepCurrentPointer: status == 'draft',
         savePolicy: savePolicy,
       );
-
-      // Reset dirty flags after a successful save.
-      // Only the latest in-flight save should clear flags.
-      if (saveGen == _saveGeneration) {
-        _assetsDirty = false;
-        _unsafeDirty = false;
-        _observationsDirty = false;
-      }
     } catch (e, st) {
       ApmLogger.warning(
         'Error saving form formId=$_formId: {Error}',
@@ -401,7 +335,7 @@ class _HeatNetworkAssessmentScreenState
         onDataChanged: _updateFormData,
         onNext: _nextPage,
         formId: _formId,
-        clientsSyncNonce: _clientsSyncNonce,
+        clients: _clients,
       ),
       DevelopmentDetailsScreen(
         formData: _formData,
@@ -556,42 +490,25 @@ class _HeatNetworkAssessmentScreenState
     _draftDoc[_assetsKey] = _assetsJson;
     _draftDoc[_unsafeKey] = _unsafeJson;
     _draftDoc[_formDataKey] = _formData;
-
-    // Initial hydration should not mark any section as dirty.
-    _assetsDirty = false;
-    _unsafeDirty = false;
-    _observationsDirty = false;
   }
 
   Future<void> _completeAndSubmit() async {
-    if (_formId == null) return;
-
     ApmLogger.info(
       'Complete+Submit start formId=$_formId',
       category: 'HNA/Submit',
     );
 
-    // Once the user submits (even if it fails), we stop treating this as the
-    // in-progress draft. It will remain in My Forms as pending for retry.
-    await _draftPersistence.clearCurrentDraft(kHeatNetworkAssessmentFormType);
-
-    await _draftPersistence.flush(
-      formType: kHeatNetworkAssessmentFormType,
-      formId: _formId!,
-    );
+    // Mark pending + drop the in-progress-draft pointer (stays in My Forms for
+    // retry), flush, then submit through the injected repository. Mobile POSTs
+    // via the HNA submitter; web PUTs via the editor API.
     await _saveForm(status: 'pending');
-    if (!mounted) return;
+    await _repo.flushDraft();
 
+    String? error;
     try {
-      await _submissionService.submitForm(formId: _formId!);
-      ApmLogger.info(
-        'Complete+Submit success formId=$_formId',
-        category: 'HNA/Submit',
-      );
-      if (!mounted) return;
-        ApmFeedback.success(context, 'Form submitted.');
-      Navigator.of(context).pop();
+      await _repo.submit();
     } catch (e, st) {
+      error = e.toString();
       ApmLogger.warning(
         'Complete+Submit failed formId=$_formId: {Error}',
         args: [e.toString()],
@@ -599,23 +516,38 @@ class _HeatNetworkAssessmentScreenState
         error: e,
         stackTrace: st,
       );
-      if (!mounted) return;
-        ApmFeedback.error(
-          context,
-          'Upload failed. Saved to My Forms for retry.\n$e',
-        );
-      Navigator.of(context).pop();
     }
+
+    if (!mounted) return;
+
+    // Web host takes over navigation (notify parent / close iframe).
+    if (widget.onCompleted != null) {
+      if (error != null) {
+        ApmFeedback.error(context, 'Save failed.\n$error');
+        return;
+      }
+      await widget.onCompleted!();
+      return;
+    }
+
+    if (error == null) {
+      ApmLogger.info(
+        'Complete+Submit success formId=$_formId',
+        category: 'HNA/Submit',
+      );
+      ApmFeedback.success(context, 'Form submitted.');
+    } else {
+      ApmFeedback.error(
+        context,
+        'Upload failed. Saved to My Forms for retry.\n$error',
+      );
+    }
+    if (mounted) Navigator.of(context).pop();
   }
 
   void _previousPage() async {
-    if (_formId != null) {
-      await _draftPersistence.flush(
-        formType: kHeatNetworkAssessmentFormType,
-        formId: _formId!,
-      );
-    }
     await _saveForm();
+    await _repo.flushDraft();
     if (_currentPage > 0) {
       _pageController.previousPage(
         duration: const Duration(milliseconds: 300),
@@ -628,13 +560,8 @@ class _HeatNetworkAssessmentScreenState
     final pages = _buildPages();
 
     if (_currentPage < pages.length - 1) {
-      if (_formId != null) {
-        await _draftPersistence.flush(
-          formType: kHeatNetworkAssessmentFormType,
-          formId: _formId!,
-        );
-      }
       await _saveForm();
+      await _repo.flushDraft();
 
       _pageController.nextPage(
         duration: const Duration(milliseconds: 300),
@@ -648,7 +575,7 @@ class _HeatNetworkAssessmentScreenState
 
   @override
   void dispose() {
-    _draftPersistence.dispose();
+    _repo.dispose();
     _pageController.dispose();
     super.dispose();
   }

@@ -2,16 +2,18 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'dart:convert';
 
+import 'package:gtapp_mobile/gtapp_mobile.dart' as gtmobile;
 import 'package:uuid/uuid.dart';
 
 import '../condition_report/condition_report_definition.dart';
 import '../condition_report/condition_report_screen.dart';
 import '../condition_report/services/cr_submission_payload_builder.dart';
+import '../generic_skeleton/form_definition_catalog_service.dart';
 import '../shared/data/web_form_repository.dart';
 import '../shared/editor/form_editor_contract.dart';
 import 'heat_network_assessment_definition.dart';
+import 'heat_network_assessment_screen.dart';
 import '../../services/portal_api_client.dart';
-import 'hna_web_editor_form_screen.dart';
 import 'services/hna_web_editor_attachment_context.dart';
 import 'services/hna_derived_metrics_calculator.dart';
 import 'services/hna_pdf_derived_calculator.dart';
@@ -52,6 +54,17 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
   Map<String, dynamic>? _session;
   Map<String, dynamic>? _submission;
   Map<String, dynamic>? _crOriginalPayload;
+
+  /// GENERIC web editor attachment manifest: attachmentId -> record
+  /// `{id, key, contentType, fileName, sizeBytes, width?, height?}`.
+  ///
+  /// Seeded from the loaded envelope's `attachments[]` and mutated by the
+  /// editable image gallery's add/delete (via the [gtmobile.GTFileManagerConfig]
+  /// upload/delete hooks installed in [_routeGeneric]). On save, the envelope's
+  /// `attachments[]` is rebuilt from this manifest restricted to the image ids
+  /// still referenced across the form's image-question answers, so deleted
+  /// images disappear and added ones appear (no stale carry-through).
+  final Map<String, Map<String, dynamic>> _genericAttachmentManifest = {};
 
   late final FormWebEditorService _service;
   String? _returnUrl;
@@ -241,7 +254,7 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
                 formId: crLocalFormId ?? 0,
                 initialData: formData,
                 generatePdfOnSubmit: false,
-                buildPayloadJson: (data) => jsonEncode(
+                buildPayloadJson: (data) async => jsonEncode(
                   CrSubmissionPayloadBuilder.buildFromFormSnapshot(
                     formSnapshot: data,
                     originalPayload: _crOriginalPayload,
@@ -274,16 +287,19 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
 
       if (ticketFormType.isNotEmpty &&
           ticketFormType != kHeatNetworkAssessmentFormType) {
-        throw PortalApiException(
-          'Unsupported editor form type "$ticketFormType".',
+        // Generic (builder-authored) form types render + edit + save through the
+        // generic declarative runtime. This is additive: CR/HNA keep their
+        // bespoke branches above; everything else now flows here instead of
+        // throwing. The throw remains only as a fallback if the definition
+        // fetch genuinely fails (see _routeGeneric).
+        await _routeGeneric(
+          ticketFormType: ticketFormType,
+          submission: submission,
         );
+        return;
       }
 
       _logDiag('route-hna', {'ticket': _ticketPreview(widget.ticket)});
-
-      final clients = _isAutoResubmit
-          ? const <String>[]
-          : await _service.getClients(ticket: widget.ticket);
 
       final payloadJson =
           (submission['payloadJson'] ?? submission['PayloadJson'] ?? '')
@@ -358,19 +374,115 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
         return;
       }
 
+      // Reconstruct the in-memory HNA document (the form_data blob shape) that
+      // the unified screen + WebFormRepository operate on, mirroring mobile.
+      final hnaFormSection = payload['form'];
+      final hnaFormId = hnaFormSection is Map
+          ? int.tryParse((hnaFormSection['id'] ?? '').toString())
+          : null;
+      final hnaFormUuid = hnaFormSection is Map ? hnaFormSection['uuid'] : null;
+      final hnaFormStatus = hnaFormSection is Map
+          ? hnaFormSection['status']
+          : null;
+      final hnaFormCreatedAt = hnaFormSection is Map
+          ? hnaFormSection['createdAt']
+          : null;
+      final hnaFormUpdatedAt = hnaFormSection is Map
+          ? hnaFormSection['updatedAt']
+          : null;
+      final hnaSummary = hna['summary'];
+      // Preserve the original submit time so the device-minted friendlyRef
+      // (report number) stays stable across edits.
+      final hnaSubmittedAt =
+          submittedAtUtc ??
+          DateTime.tryParse(
+            (hnaSummary is Map ? (hnaSummary['submittedAt'] ?? '') : '')
+                .toString(),
+          );
+
+      final hnaDoc = <String, dynamic>{
+        'formData': formData,
+        'assets': hna['assets'] is Map
+            ? Map<String, dynamic>.from(hna['assets'] as Map)
+            : <String, dynamic>{},
+        'observations': hna['observations'] is List
+            ? List<dynamic>.from(hna['observations'] as List)
+            : <dynamic>[],
+        'unsafe': hna['unsafe'] is Map
+            ? Map<String, dynamic>.from(hna['unsafe'] as Map)
+            : <String, dynamic>{},
+      };
+
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           settings: const RouteSettings(name: '/hna'),
-          builder: (_) => HnaWebEditorFormScreen(
-            ticket: widget.ticket,
-            submissionId: submissionId,
-            submittedAtUtc: submittedAtUtc,
-            schemaVersion: schemaVersion,
-            originalPayload: payload,
-            initialFormData: formData,
-            clients: clients,
-            service: _service,
-            returnUrl: _returnUrl,
+          builder: (_) => HeatNetworkAssessmentScreen(
+            formId: hnaFormId,
+            repo: WebFormRepository(
+              service: _service,
+              ticket: widget.ticket,
+              formType: kHeatNetworkAssessmentFormType,
+              formId: hnaFormId ?? 0,
+              initialData: hnaDoc,
+              generatePdfOnSubmit: true,
+              buildPayloadJson: (data) async {
+                // Build the attachment manifest from the editor context so the
+                // server's existing att-ids for already-uploaded blobs are
+                // preserved (else the PDF can't resolve the images on a revision).
+                final fd = data['formData'] is Map
+                    ? Map<String, dynamic>.from(data['formData'] as Map)
+                    : <String, dynamic>{};
+                final assets = data['assets'] is Map
+                    ? Map<String, dynamic>.from(data['assets'] as Map)
+                    : <String, dynamic>{};
+                final obs = data['observations'] is List
+                    ? (data['observations'] as List)
+                          .whereType<Map>()
+                          .map((e) => Map<String, dynamic>.from(e))
+                          .toList()
+                    : <Map<String, dynamic>>[];
+                final unsafe = data['unsafe'] is Map
+                    ? Map<String, dynamic>.from(data['unsafe'] as Map)
+                    : <String, dynamic>{};
+                final manifest = FormWebEditorAttachmentContext.instance
+                    .buildManifest(
+                      formId: hnaFormId ?? 0,
+                      formData: fd,
+                      assetsJson: assets,
+                      observationsJson: obs,
+                      unsafeJson: unsafe,
+                    );
+                return jsonEncode(
+                  await HnaSubmissionPayloadBuilder.buildFromFormSnapshot(
+                    formSnapshot: data,
+                    formId: hnaFormId ?? 0,
+                    formUuid: hnaFormUuid,
+                    formType: kHeatNetworkAssessmentFormType,
+                    status: hnaFormStatus,
+                    createdAt: hnaFormCreatedAt,
+                    updatedAt: hnaFormUpdatedAt,
+                    submittedAt: hnaSubmittedAt,
+                    recomputeDerived: true,
+                    attachmentsOverride: manifest,
+                  ),
+                );
+              },
+            ),
+            onCompleted: () async {
+              if (kIsWeb) {
+                WebEditorReturn.notifyParentComplete(
+                  ticket: widget.ticket,
+                  returnUrl: _returnUrl,
+                );
+                if (_returnUrl != null && _returnUrl!.isNotEmpty) {
+                  WebEditorReturn.returnToCaller(
+                    _returnUrl!,
+                    ticket: widget.ticket,
+                    preferClose: false,
+                  );
+                }
+              }
+            },
           ),
         ),
       );
@@ -396,6 +508,332 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
     }
   }
 
+
+  /// Renders + edits + saves a generic (builder-authored) form submission on the
+  /// generic declarative runtime.
+  ///
+  /// 1. Fetches the published form definition (by formDefinitionId if the stored
+  ///    envelope carries one, else by formType) -> [gtmobile.FormPackage].
+  /// 2. Seeds the runtime from the stored generic envelope's `response` object
+  ///    (a `FormState.toJson()` map) via [gtmobile.FormState.fromJson]. Guards an
+  ///    empty/absent response (new-ish row) by rendering unseeded.
+  /// 3. Renders [gtmobile.GTDeclarativeFormView] with `initialState`.
+  /// 4. On complete, rebuilds the envelope with `response` replaced by the new
+  ///    `FormState.toJson()` (preserving identity fields) and PUTs it via the
+  ///    same web-editor update path CR/HNA use.
+  Future<void> _routeGeneric({
+    required String ticketFormType,
+    required Map<String, dynamic> submission,
+  }) async {
+    _logDiag('route-generic', {
+      'ticket': _ticketPreview(widget.ticket),
+      'formType': ticketFormType,
+    });
+
+    // The GET-submission PayloadJson IS the stored generic envelope.
+    final payloadJson =
+        (submission['payloadJson'] ?? submission['PayloadJson'] ?? '')
+            .toString()
+            .trim();
+
+    Map<String, dynamic> envelope = <String, dynamic>{};
+    if (payloadJson.isNotEmpty) {
+      final decoded = jsonDecode(payloadJson);
+      if (decoded is Map) {
+        envelope = Map<String, dynamic>.from(decoded);
+      }
+    }
+
+    // Prefer fetching by the pinned definition id if the envelope carries one;
+    // else fall back to latest-by-formType.
+    final envelopeDefinitionId =
+        (envelope['formDefinitionId'] ?? envelope['FormDefinitionId'] ?? '')
+            .toString()
+            .trim();
+
+    // The web editor authenticates by TICKET (no JWT), so it CANNOT use the app's
+    // JWT-scoped definition catalog (that throws "You are not signed in"). The server
+    // bundles the published definition into this ticket-authed snapshot — prefer it.
+    // Only fall back to the catalog for the in-app context (where a token exists).
+    final snapshotDefinitionJson =
+        (submission['definitionJson'] ?? submission['DefinitionJson'] ?? '')
+            .toString()
+            .trim();
+
+    final gtmobile.FormPackage package;
+    if (snapshotDefinitionJson.isNotEmpty) {
+      final decodedDef = jsonDecode(snapshotDefinitionJson);
+      package = gtmobile.FormPackage.fromJson(
+        Map<String, dynamic>.from(decodedDef as Map),
+      );
+    } else {
+      final catalog = FormDefinitionCatalogService();
+      package = envelopeDefinitionId.isNotEmpty
+          ? await catalog.fetchDefinition(id: envelopeDefinitionId)
+          : await catalog.fetchDefinition(formType: ticketFormType);
+    }
+
+    // Install the remote image resolver so the generic image question renders
+    // EXISTING images from R2 (read-only) instead of querying the local
+    // GTDatabaseService (unavailable on web). The image answer is a list of
+    // image ids that are IDENTICAL to the R2 attachment ids, so we fetch each by
+    // id through the SAME ticket-authed endpoint used elsewhere
+    // (GET /api/editor/attachments/{id}/content). Add/delete is out of scope.
+    final ticket = widget.ticket;
+    final service = _service;
+    gtmobile.GTFileManagerConfig.remoteImageResolver = (String imageId) async {
+      final id = imageId.trim();
+      if (id.isEmpty) return null;
+      try {
+        final bytes = await service.getAttachmentBytes(
+          ticket: ticket,
+          attachmentId: id,
+        );
+        return Uint8List.fromList(bytes);
+      } catch (e) {
+        _logDiag('generic-remote-image-failed', {
+          'ticket': _ticketPreview(ticket),
+          'imageId': id,
+          'error': e.toString(),
+        });
+        return null;
+      }
+    };
+
+    // Seed the editor-side attachment manifest from the stored envelope so adds
+    // and deletes mutate a single source of truth that the save reconciliation
+    // reads. Each entry is keyed by its attachment id (== image id == R2
+    // attachment id).
+    _genericAttachmentManifest.clear();
+    final seedAttachments = envelope['attachments'] ?? envelope['Attachments'];
+    if (seedAttachments is List) {
+      for (final raw in seedAttachments) {
+        if (raw is! Map) continue;
+        final map = Map<String, dynamic>.from(raw);
+        final id = (map['id'] ?? map['Id'] ?? '').toString().trim();
+        if (id.isEmpty) continue;
+        _genericAttachmentManifest[id] = map;
+      }
+    }
+
+    // ADD hook: mint a new attachment id, presign + PUT the bytes (ticket-authed),
+    // record the returned key in the manifest, and return the id so the image
+    // question appends it to its answer.
+    gtmobile.GTFileManagerConfig.remoteImageUploader =
+        (Uint8List bytes, String fileName, String contentType) async {
+          final attachmentId = const Uuid().v4();
+          final record = await service.uploadGenericAttachment(
+            ticket: ticket,
+            attachmentId: attachmentId,
+            bytes: bytes,
+            fileName: fileName,
+            contentType: contentType,
+          );
+          _genericAttachmentManifest[attachmentId] =
+              Map<String, dynamic>.from(record);
+          _logDiag('generic-remote-image-added', {
+            'ticket': _ticketPreview(ticket),
+            'imageId': attachmentId,
+          });
+          return attachmentId;
+        };
+
+    // DELETE hook: best-effort R2 delete (ticket-authed) + manifest removal. The
+    // envelope reference is dropped by the save reconciliation. A storage delete
+    // failure must NOT block the UI removal, so swallow it (the object becomes
+    // orphaned at worst; the reference is still removed on save).
+    gtmobile.GTFileManagerConfig.remoteImageDeleter = (String imageId) async {
+      final id = imageId.trim();
+      if (id.isEmpty) return;
+      try {
+        await service.deleteGenericAttachment(ticket: ticket, attachmentId: id);
+      } catch (e) {
+        _logDiag('generic-remote-image-delete-failed', {
+          'ticket': _ticketPreview(ticket),
+          'imageId': id,
+          'error': e.toString(),
+        });
+      }
+      _genericAttachmentManifest.remove(id);
+    };
+
+    // Seed from the submitted answers. The envelope's `response` object is the
+    // FormState.toJson() map. Guard absence / empty (new-ish row -> unseeded).
+    final responseRaw = envelope['response'] ?? envelope['Response'];
+    gtmobile.FormState? seededState;
+    if (responseRaw is Map && responseRaw.isNotEmpty) {
+      try {
+        seededState = gtmobile.FormState.fromJson(
+          responseRaw.map((k, v) => MapEntry(k.toString(), v)),
+        );
+      } catch (e) {
+        // A malformed/incompatible stored response should not block editing;
+        // fall back to an unseeded render so the user can re-author.
+        _logDiag('generic-seed-failed', {
+          'ticket': _ticketPreview(widget.ticket),
+          'error': e.toString(),
+        });
+        seededState = null;
+      }
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _session = _session ?? const <String, dynamic>{};
+      _submission = submission;
+      _loading = false;
+    });
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        settings: const RouteSettings(name: '/generic-web-editor'),
+        builder: (_) => _GenericWebEditorScaffold(
+          package: package,
+          initialState: seededState,
+          onFormComplete: (gtmobile.FormState state) async {
+            await _saveGenericSubmission(
+              originalEnvelope: envelope,
+              package: package,
+              state: state,
+            );
+            if (kIsWeb) {
+              WebEditorReturn.notifyParentComplete(
+                ticket: widget.ticket,
+                returnUrl: _returnUrl,
+              );
+              if (_returnUrl != null && _returnUrl!.isNotEmpty) {
+                WebEditorReturn.returnToCaller(
+                  _returnUrl!,
+                  ticket: widget.ticket,
+                  preferClose: false,
+                );
+              }
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Builds a fresh generic envelope = the original envelope with its `response`
+  /// replaced by the edited `state.toJson()`, preserving identity fields, then
+  /// PUTs it through the existing web-editor update path (same as CR/HNA).
+  Future<void> _saveGenericSubmission({
+    required Map<String, dynamic> originalEnvelope,
+    required gtmobile.FormPackage package,
+    required gtmobile.FormState state,
+  }) async {
+    final out = Map<String, dynamic>.from(originalEnvelope);
+    final definition = package.formDefinition;
+
+    // Preserve identity from the original envelope where present; backfill from
+    // the definition / state so a sparse (new-ish) envelope still round-trips.
+    out['formType'] =
+        (originalEnvelope['formType'] ?? originalEnvelope['FormType']) ??
+            definition.formType;
+    out['formDefinitionId'] =
+        (originalEnvelope['formDefinitionId'] ??
+            originalEnvelope['FormDefinitionId']) ??
+        (state.formDefinitionId.isNotEmpty
+            ? state.formDefinitionId
+            : definition.id);
+    out['formDefinitionVersion'] =
+        (originalEnvelope['formDefinitionVersion'] ??
+            originalEnvelope['FormDefinitionVersion']) ??
+        (state.schemaVersion ?? definition.version);
+    // Keep clientResponseId so identity is stable across edits.
+    final clientResponseId = originalEnvelope['clientResponseId'] ??
+        originalEnvelope['ClientResponseId'];
+    if (clientResponseId != null) {
+      out['clientResponseId'] = clientResponseId;
+    }
+    // Preserve the original submit time so the report identity stays stable.
+    final submittedAt = originalEnvelope['submittedAtUtc'] ??
+        originalEnvelope['SubmittedAtUtc'];
+    if (submittedAt != null) {
+      out['submittedAtUtc'] = submittedAt;
+    }
+
+    // The edited answers.
+    out['response'] = state.toJson();
+
+    // RECONCILE attachments[]: write exactly the images still referenced across
+    // the form's image-question answers, resolving their records from the
+    // editor-side manifest (seeded from the original envelope, mutated by
+    // add/delete). Deleted images drop out; added images appear. Do NOT carry
+    // the original list through untouched.
+    out['attachments'] = _reconcileGenericAttachments(
+      package: package,
+      state: state,
+    );
+
+    await _service.updateSubmission(
+      ticket: widget.ticket,
+      payloadJson: jsonEncode(out),
+      generatePdf: false,
+    );
+  }
+
+  /// Build the envelope `attachments[]` from the manifest, restricted to the
+  /// image ids still referenced by the form's image-question answers in [state].
+  ///
+  /// Walks every [gtmobile.ImageQuestion] in the definition, reads its answer
+  /// (a list of image ids — or a single id) from the final [state], and emits
+  /// one manifest record per referenced id. Ids without a manifest record (e.g.
+  /// an image that existed in the original envelope but never had an
+  /// attachments[] entry) are emitted as a minimal `{id}` record so the
+  /// reference is preserved and the server can still resolve it.
+  List<Map<String, dynamic>> _reconcileGenericAttachments({
+    required gtmobile.FormPackage package,
+    required gtmobile.FormState state,
+  }) {
+    final referenced = <String>{};
+
+    final imageQuestions = <gtmobile.ImageQuestion>[];
+    for (final section in package.formDefinition.sections) {
+      imageQuestions.addAll(
+        section.getAllElementsOfType<gtmobile.ImageQuestion>(),
+      );
+    }
+
+    final answersById = state.answersByQuestionId;
+    for (final q in imageQuestions) {
+      dynamic answer = state.answers[q.id];
+      answer ??= state.answers[q.displayReference];
+      if (answer == null && answersById != null) {
+        answer = answersById[q.id];
+      }
+
+      if (answer is List) {
+        for (final v in answer) {
+          final id = v?.toString().trim() ?? '';
+          if (id.isNotEmpty) referenced.add(id);
+        }
+      } else if (answer is String && answer.trim().isNotEmpty) {
+        referenced.add(answer.trim());
+      }
+    }
+
+    final out = <Map<String, dynamic>>[];
+    for (final id in referenced) {
+      final record = _genericAttachmentManifest[id];
+      if (record != null) {
+        out.add(Map<String, dynamic>.from(record));
+      } else {
+        // Referenced but unknown to the manifest — preserve the reference.
+        out.add(<String, dynamic>{'id': id});
+      }
+    }
+
+    _logDiag('generic-attachments-reconciled', {
+      'ticket': _ticketPreview(widget.ticket),
+      'referenced': referenced.length,
+      'manifest': _genericAttachmentManifest.length,
+    });
+
+    return out;
+  }
 
   String _resolveSessionFormType(Map<String, dynamic> session) {
     final raw =
@@ -750,6 +1188,68 @@ class _MetaRow extends StatelessWidget {
     return Text(
       parts.join(' • '),
       style: Theme.of(context).textTheme.bodySmall,
+    );
+  }
+}
+
+/// Hosts the generic declarative runtime for a web-editor session, seeded with
+/// the existing submission's answers and saving back via [onFormComplete].
+///
+/// Mirrors `ServerFormRenderScreen` (the CREATE flow) except it threads
+/// `initialState` for seeding and delegates persistence to the supplied
+/// completion callback (which rebuilds the envelope + PUTs it).
+class _GenericWebEditorScaffold extends StatefulWidget {
+  const _GenericWebEditorScaffold({
+    required this.package,
+    required this.initialState,
+    required this.onFormComplete,
+  });
+
+  final gtmobile.FormPackage package;
+  final gtmobile.FormState? initialState;
+  final Future<void> Function(gtmobile.FormState state) onFormComplete;
+
+  @override
+  State<_GenericWebEditorScaffold> createState() =>
+      _GenericWebEditorScaffoldState();
+}
+
+class _GenericWebEditorScaffoldState extends State<_GenericWebEditorScaffold> {
+  bool _saving = false;
+
+  Future<void> _handleComplete(gtmobile.FormState state) async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await widget.onFormComplete(state);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Save failed: $e')),
+      );
+      return;
+    }
+    if (mounted) setState(() => _saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        gtmobile.GTDeclarativeFormView(
+          package: widget.package,
+          initialState: widget.initialState,
+          onFormComplete: _handleComplete,
+        ),
+        if (_saving)
+          const Positioned.fill(
+            child: ColoredBox(
+              color: Color(0x66000000),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          ),
+      ],
     );
   }
 }

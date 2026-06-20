@@ -103,6 +103,106 @@ class FormWebEditorService {
     );
   }
 
+  /// GENERIC web editor: presign + PUT a newly picked image to R2 (ticket-authed),
+  /// returning the attachment manifest record `{id, key, contentType, fileName,
+  /// sizeBytes}` to record in the envelope's `attachments[]` and append to the
+  /// question answer. The server derives the key from the submission (never
+  /// trusts the client). [attachmentId] is a NEW client-minted id.
+  Future<Map<String, dynamic>> uploadGenericAttachment({
+    required String ticket,
+    required String attachmentId,
+    required List<int> bytes,
+    required String fileName,
+    required String contentType,
+  }) async {
+    final targetJson = await apiClient.postJson(
+      '/api/editor/attachments/upload-targets',
+      headers: {ticketHeader: ticket},
+      body: {
+        'items': [
+          {
+            'attachmentId': attachmentId,
+            'contentType': contentType,
+            'fileName': fileName,
+            'sizeBytes': bytes.length,
+          },
+        ],
+      },
+    );
+
+    if (!PortalApiClient.readResultSuccess(targetJson)) {
+      throw PortalApiException(
+        PortalApiClient.readResultMessage(targetJson) ??
+            'Failed to get upload target',
+      );
+    }
+
+    final data = PortalApiClient.readResultData<Map<String, dynamic>>(
+      targetJson,
+    );
+    final items = data == null ? null : data['items'];
+    if (items is! List || items.isEmpty || items.first is! Map) {
+      throw PortalApiException('Malformed upload target response');
+    }
+
+    final target = Map<String, dynamic>.from(items.first as Map);
+    final uploadUrl = (target['uploadUrl'] ?? '').toString().trim();
+    final key = (target['key'] ?? '').toString().trim();
+    if (uploadUrl.isEmpty || key.isEmpty) {
+      throw PortalApiException('Missing upload URL or key');
+    }
+
+    final requiredHeaders = <String, String>{};
+    final rawHeaders = target['requiredHeaders'];
+    if (rawHeaders is Map) {
+      rawHeaders.forEach((k, v) {
+        requiredHeaders[k.toString()] = v.toString();
+      });
+    }
+    requiredHeaders.putIfAbsent('Content-Type', () => contentType);
+
+    final putRequest = http.Request('PUT', Uri.parse(uploadUrl));
+    putRequest.headers.addAll(requiredHeaders);
+    putRequest.bodyBytes = bytes;
+
+    final putResponse = await apiClient.httpClient.send(putRequest);
+    final putBody = await putResponse.stream.bytesToString();
+    if (putResponse.statusCode < 200 || putResponse.statusCode >= 300) {
+      throw PortalApiException(
+        putBody.isEmpty ? 'Direct upload failed' : putBody,
+        statusCode: putResponse.statusCode,
+      );
+    }
+
+    return <String, dynamic>{
+      'id': attachmentId,
+      'key': key,
+      'contentType': contentType,
+      'fileName': fileName,
+      'sizeBytes': bytes.length,
+    };
+  }
+
+  /// GENERIC web editor: best-effort delete of an attachment's R2 object
+  /// (ticket-authed). The envelope reference is removed by the editor's save
+  /// reconciliation; this only reclaims storage. Swallows nothing — the caller
+  /// decides whether a failure should block the optimistic UI removal.
+  Future<void> deleteGenericAttachment({
+    required String ticket,
+    required String attachmentId,
+  }) async {
+    final json = await apiClient.deleteJson(
+      '/api/editor/attachments/$attachmentId',
+      headers: {ticketHeader: ticket},
+    );
+
+    if (!PortalApiClient.readResultSuccess(json)) {
+      throw PortalApiException(
+        PortalApiClient.readResultMessage(json) ?? 'Delete failed',
+      );
+    }
+  }
+
   Future<Map<String, dynamic>> uploadAttachment({
     required String ticket,
     required String attachmentId,

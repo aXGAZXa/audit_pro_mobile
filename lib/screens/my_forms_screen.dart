@@ -199,7 +199,13 @@ class _MyFormsScreenState extends State<MyFormsScreen> {
       final form = await _db.getForm(formId);
       final formType = _formType(form ?? const {});
       if (formType == kConditionReportFormType) {
-        await _crSubmissionService.submitForm(formId: formId);
+        final storedData = form?['form_data'];
+        await _crSubmissionService.submitForm(
+          formId: formId,
+          formSnapshot: storedData is Map
+              ? Map<String, dynamic>.from(storedData)
+              : <String, dynamic>{},
+        );
       } else {
         await _submissionService.submitForm(formId: formId);
       }

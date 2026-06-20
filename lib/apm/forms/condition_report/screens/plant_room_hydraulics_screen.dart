@@ -1,7 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
-import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 
 class PlantRoomHydraulicsScreen extends StatefulWidget {
@@ -17,6 +17,7 @@ class _PlantRoomHydraulicsScreenState extends State<PlantRoomHydraulicsScreen> {
 
   int? _formId;
   int? _plantRoomId;
+  FormRepository? _repo;
 
   String? _ph1FreeOfLeaks;
   String? _ph2Corrosion;
@@ -46,6 +47,7 @@ class _PlantRoomHydraulicsScreenState extends State<PlantRoomHydraulicsScreen> {
     if (args != null) {
       _formId = args['formId'] as int?;
       _plantRoomId = args['plantRoomId'] as int?;
+      _repo = args['repo'] as FormRepository?;
 
       if (_plantRoomId != null) {
         _loadResponses();
@@ -56,9 +58,10 @@ class _PlantRoomHydraulicsScreenState extends State<PlantRoomHydraulicsScreen> {
   Future<void> _loadResponses() async {
     if (_plantRoomId == null) return;
 
-    final responses = await DatabaseHelper.instance.getPlantRoomResponses(
-      _plantRoomId!,
-    );
+    final item = await _repo?.getCollectionItem('plantRooms', _plantRoomId!);
+    final responses = (item?['responses'] is Map)
+        ? Map<String, dynamic>.from(item!['responses'] as Map)
+        : <String, dynamic>{};
     if (mounted) {
       setState(() {
         _ph1FreeOfLeaks = responses['ph1FreeOfLeaks'];
@@ -112,18 +115,26 @@ class _PlantRoomHydraulicsScreenState extends State<PlantRoomHydraulicsScreen> {
       return;
     }
 
-    await DatabaseHelper.instance.savePlantRoomResponses(
-      plantRoomId: _plantRoomId!,
-      responses: {
-        'ph1FreeOfLeaks': _ph1FreeOfLeaks,
-        'ph2Corrosion': _ph2Corrosion,
-        'ph3Insulated': _ph3Insulated,
-        'ph4Supported': _ph4Supported,
-        'ph5Overpressure': _ph5Overpressure,
-        'ph6WaterValves': _ph6WaterValves,
-        'ph7VisuallySatisfactory': _ph7VisuallySatisfactory,
-      },
-    );
+    final existingItem =
+        await _repo?.getCollectionItem('plantRooms', _plantRoomId!) ??
+        <String, dynamic>{};
+    final existingResponses = (existingItem['responses'] is Map)
+        ? Map<String, dynamic>.from(existingItem['responses'] as Map)
+        : <String, dynamic>{};
+    final newResponses = <String, dynamic>{
+      'ph1FreeOfLeaks': _ph1FreeOfLeaks,
+      'ph2Corrosion': _ph2Corrosion,
+      'ph3Insulated': _ph3Insulated,
+      'ph4Supported': _ph4Supported,
+      'ph5Overpressure': _ph5Overpressure,
+      'ph6WaterValves': _ph6WaterValves,
+      'ph7VisuallySatisfactory': _ph7VisuallySatisfactory,
+    };
+    await _repo?.saveCollectionItem('plantRooms', <String, dynamic>{
+      ...existingItem,
+      'id': _plantRoomId,
+      'responses': {...existingResponses, ...newResponses},
+    });
 
     if (mounted) {
       Navigator.pop(context);

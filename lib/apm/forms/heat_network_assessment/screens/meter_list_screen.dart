@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'dart:convert';
 
@@ -115,6 +116,9 @@ class _MeterListScreenState extends State<MeterListScreen> {
 
   Future<void> _loadDraftIfNeeded({bool force = false}) async {
     if (!force && _assetsJson != null) return;
+    // Web has no local SQLite; the parent supplies the current assets snapshot
+    // via args (sourced from the repository document), so never read the DB here.
+    if (kIsWeb) return;
     if (_formId == null) return;
 
     final form = await DatabaseHelper.instance.getForm(_formId!);
@@ -250,9 +254,10 @@ class _MeterListScreenState extends State<MeterListScreen> {
   Future<void> _loadMeters() async {
     setState(() => _isLoading = true);
 
-    // Always refresh from the persisted draft doc: downstream screens may have
-    // updated the single JSON blob without updating our local in-memory copy.
-    await _loadDraftIfNeeded(force: true);
+    // Use the in-memory assets snapshot supplied by the parent (sourced from the
+    // single repository document, kept current via the _update* callbacks). Falls
+    // back to the persisted draft only on mobile when no snapshot was provided.
+    await _loadDraftIfNeeded();
     final assets = _assetsJson ?? <String, dynamic>{};
     final all = _readHeatMeters(assets);
     final filtered = _filteredMeters(all);

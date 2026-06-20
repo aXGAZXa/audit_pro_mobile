@@ -12,6 +12,38 @@ class ApmLogger {
   static final ApmLogSink _sink = ApmLogSinkImpl();
   static bool _initialized = false;
 
+  /// Optional flush trigger registered by the device-log upload service. Invoked
+  /// (best-effort, fire-and-forget by the registrant) after an error/fatal entry
+  /// is persisted so newly captured problems are pushed to the server promptly.
+  ///
+  /// Kept as a plain callback so the logger has no dependency on the upload
+  /// service (which depends on the logger). Failures in the callback must never
+  /// propagate back here and must never themselves call ApmLogger.error/fatal
+  /// (that would recurse). The registrant is responsible for debouncing.
+  static void Function()? onFlushRequested;
+
+  /// Exposes persisted-but-unuploaded rows for the upload service. Returns an
+  /// empty list before init / on web. Never throws into callers.
+  static Future<List<ApmLogEntry>> readUnuploaded({int limit = 50}) async {
+    if (!_initialized || kIsWeb) return <ApmLogEntry>[];
+    try {
+      return await _sink.readUnuploaded(limit: limit);
+    } catch (_) {
+      return <ApmLogEntry>[];
+    }
+  }
+
+  /// Marks rows as uploaded after a successful server POST. Never throws.
+  static Future<void> markUploaded(List<String> ids) async {
+    if (!_initialized || kIsWeb || ids.isEmpty) return;
+    try {
+      await _sink.markUploaded(ids);
+    } catch (_) {
+      // Swallow: worst case the rows are re-sent next flush (idempotent upsert
+      // on the server side keyed by client log id).
+    }
+  }
+
   static String? _cat(String? category) {
     final trimmed = (category ?? '').trim();
     if (trimmed.isEmpty) return 'APM';
@@ -146,6 +178,21 @@ class ApmLogger {
         ], 'ApmLogger');
       }),
     );
+
+    // Nudge the upload service to flush soon (it debounces). Only for the more
+    // severe levels to avoid excessive uploads from warning bursts; warnings
+    // still ride along on the next start/error/periodic flush. Guarded so a
+    // throwing callback never disrupts logging or recurses into ApmLogger.
+    if (level == ApmLogLevel.error || level == ApmLogLevel.fatal) {
+      final cb = onFlushRequested;
+      if (cb != null) {
+        try {
+          cb();
+        } catch (_) {
+          // Never let a flush-trigger failure affect logging.
+        }
+      }
+    }
   }
 
   static String _newId() {

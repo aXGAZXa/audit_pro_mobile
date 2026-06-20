@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../shared/editor/form_editor_contract.dart';
 import 'condition_report_definition.dart';
+import 'services/cr_observation_record.dart';
 import 'screens/assets_continued_screen.dart';
 import 'screens/communal_heating_system_screen.dart';
 import 'screens/gas_meter_screen.dart';
@@ -220,15 +221,19 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
       );
       final now = DateTime.now().toUtc().toIso8601String();
 
-      await _repo.saveCollectionItem('observations', <String, dynamic>{
-        if (existing['id'] != null) 'id': existing['id'],
-        'question_reference': questionRef,
-        'notes': (notes?.isEmpty ?? true) ? null : notes,
-        'images': imagePaths,
-        'is_unsafe': existing['is_unsafe'] ?? 0,
-        'created_at': existing['created_at'] ?? now,
-        'updated_at': now,
-      });
+      await _repo.saveCollectionItem(
+        'observations',
+        buildCrObservationRecord(
+          id: existing['id'],
+          formId: _formId ?? 0,
+          questionReference: questionRef,
+          notes: (notes?.isEmpty ?? true) ? null : notes,
+          imagePaths: imagePaths,
+          isUnsafe: existing['is_unsafe'] == 1 || existing['is_unsafe'] == true,
+          existing: existing.isEmpty ? null : existing,
+          nowIso: now,
+        ),
+      );
       await _loadObservations();
     } catch (e) {
       developer.log('Error saving observation: $e');
@@ -283,8 +288,6 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
       );
     }
 
-    final isWebEditorMode = widget.mode == FormEditorRuntimeMode.webEditor;
-
     return AppScaffold(
       title: 'Condition Report',
       body: PageView(
@@ -293,15 +296,16 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
         onPageChanged: (index) => setState(() => _currentPage = index),
         children: [
           SiteDetailsScreen(
+            repo: _repo,
             formData: _formData,
             onDataChanged: _updateFormData,
             onNext: _nextPage,
             formId: _formId,
-            isWebEditorMode: isWebEditorMode,
             onObservationsChanged: _loadObservations,
             hasObservations: _hasObservations,
           ),
           GasMeterScreen(
+            repo: _repo,
             formData: _formData,
             onDataChanged: _updateFormData,
             onNext: _nextPage,
@@ -311,6 +315,7 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
             hasObservations: _hasObservations,
           ),
           InfrastructureOutsideScreen(
+            repo: _repo,
             formData: _formData,
             onDataChanged: _updateFormData,
             onNext: _nextPage,
@@ -320,14 +325,13 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
             hasObservations: _hasObservations,
           ),
           SiteAssetsScreen(
-            formData: _formData,
+            repo: _repo,
             onNext: _nextPage,
             onBack: _previousPage,
             formId: _formId,
-            mode: widget.mode,
-            onDataChanged: _updateFormData,
           ),
           AssetsContinuedScreen(
+            repo: _repo,
             formData: _formData,
             onDataChanged: _updateFormData,
             onNext: _nextPage,
@@ -337,14 +341,13 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
             hasObservations: _hasObservations,
           ),
           PlantRoomsListScreen(
-            formData: _formData,
+            repo: _repo,
             onNext: _nextPage,
             onBack: _previousPage,
             formId: _formId,
-            mode: widget.mode,
-            onDataChanged: _updateFormData,
           ),
           CommunalHeatingSystemScreen(
+            repo: _repo,
             formData: _formData,
             onDataChanged: _updateFormData,
             onNext: _nextPage,
@@ -352,6 +355,7 @@ class _ConditionReportScreenState extends State<ConditionReportScreen> {
             formId: _formId,
           ),
           UnsafeSituationsScreen(
+            repo: _repo,
             formData: _formData,
             onNext: _nextPage,
             onBack: _previousPage,

@@ -1,61 +1,41 @@
-import 'package:audit_pro_mobile/apm/database/database_helper.dart';
 import 'package:audit_pro_mobile/apm/forms/condition_report/condition_report_definition.dart';
 
 class CrSubmissionPayloadBuilder {
   static const int payloadSchemaVersion = 2;
 
-  static Future<Map<String, dynamic>?> build({
-    required int formId,
-    DatabaseHelper? db,
-    DateTime? submittedAt,
-  }) async {
-    final database = db ?? DatabaseHelper.instance;
-    final form = await database.getForm(formId);
-    if (form == null) return null;
-
-    final formDataRaw = form['form_data'];
-    final formData = formDataRaw is Map
-        ? Map<String, dynamic>.from(formDataRaw)
-        : <String, dynamic>{};
-
-    final assets = await database.getAssets(formId);
-    final plantRooms = await database.getPlantRooms(formId);
-    final observations = await database.getFormObservations(formId);
-    final unsafeObservations = await database.getUnsafeObservations(formId);
-    final unsafeReports = await database.getUnsafeReports(formId);
-
-    final conditionReport = <String, dynamic>{...formData};
-    conditionReport['assets'] = assets;
-    conditionReport['plantRooms'] = plantRooms;
-    conditionReport['observations'] = observations;
-    conditionReport['unsafe'] = {
-      'unsafeObservations': unsafeObservations,
-      'unsafeReports': unsafeReports,
-    };
-
-    final attachments = _buildAttachments(conditionReport);
-    if (attachments.isNotEmpty) {
-      final byPath = {
-        for (final a in attachments)
-          (a['localPath'] ?? '').toString(): (a['id'] ?? '').toString(),
-      };
-      _rewriteAttachmentRefsInPlace(conditionReport, byPath);
-      conditionReport['attachments'] = attachments;
-    }
-
-    final submittedAtUtc = (submittedAt ?? DateTime.now().toUtc())
-        .toIso8601String();
-
-    return {
-      'payloadSchemaVersion': payloadSchemaVersion,
-      'form': {
-        'formType': kConditionReportFormType,
-        'formId': form['id'],
-        'uuid': form['uuid'],
-        'submittedAtUtc': submittedAtUtc,
+  /// Assemble the canonical CR snapshot from the repository's in-memory document
+  /// (`repo.formData`) into the exact shape [buildFromFormSnapshot] expects —
+  /// collections as keys plus the nested `unsafe:{unsafeObservations,
+  /// unsafeReports}`. `unsafeObservations` is the DERIVED view of observations
+  /// flagged unsafe (not a stored collection), mirroring what `build()` produces
+  /// from the DB getters. Proven byte-identical to `build()` in
+  /// `cr_mobile_snapshot_equivalence_test.dart`, so mobile submit can serialize
+  /// from the document instead of the relational tables.
+  static Map<String, dynamic> assembleSnapshot(Map<String, dynamic> data) {
+    final observations = _listOfMaps(data['observations']);
+    return <String, dynamic>{
+      ...data,
+      'assets': _listOfMaps(data['assets']),
+      'plantRooms': _listOfMaps(data['plantRooms']),
+      'observations': observations,
+      'unsafe': <String, dynamic>{
+        'unsafeObservations': observations.where(_isUnsafeRow).toList(),
+        'unsafeReports': _listOfMaps(data['unsafeReports']),
       },
-      'conditionReport': conditionReport,
     };
+  }
+
+  static List<Map<String, dynamic>> _listOfMaps(dynamic raw) {
+    if (raw is! List) return <Map<String, dynamic>>[];
+    return raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  static bool _isUnsafeRow(Map<String, dynamic> o) {
+    final f = o['is_unsafe'];
+    return f == true || f == 1 || f?.toString() == '1';
   }
 
   static Map<String, dynamic> buildFromFormSnapshot({

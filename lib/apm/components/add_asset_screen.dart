@@ -6,6 +6,7 @@ import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import '../components/app_scaffold.dart';
 import '../components/app_autocomplete_field.dart';
 import '../components/form_widgets.dart';
+import '../forms/shared/data/form_repository.dart';
 
 class AddAssetScreen extends StatefulWidget {
   const AddAssetScreen({super.key});
@@ -25,6 +26,10 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
   final _estimateAgeController = TextEditingController();
 
   int? _formId;
+  /// Injected I/O. When present (CR form flow), the asset is written into the
+  /// form document via the repo (single writer). Null for legacy callers (e.g.
+  /// the standalone asset register), which fall back to DatabaseHelper.
+  FormRepository? _repo;
   Map<String, dynamic>? _existingAsset;
   List<Map<String, dynamic>> _assetTypes = [];
   List<Map<String, dynamic>> _assetStatuses = [];
@@ -37,42 +42,73 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
   bool _loadingAssetTypes = true;
   int _observationCount = 0;
 
+  bool _didInitFromArgs = false;
+
   @override
   void initState() {
     super.initState();
-    _loadAssetTypes();
-    _loadAssetStatuses();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (_didInitFromArgs) return;
+    _didInitFromArgs = true;
+
     final args =
         ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    if (args != null && _formId == null) {
+    if (args != null) {
       _formId = args['formId'] as int?;
+      _repo = args['repo'] as FormRepository?;
       _existingAsset = args['asset'] as Map<String, dynamic>?;
       if (_existingAsset != null) {
         _loadExistingData();
       }
     }
+    // Reference data loads here (after `_repo` is read) so the web editor —
+    // which has no on-device DB — resolves it from the bundled payload data.
+    _loadAssetTypes();
+    _loadAssetStatuses();
   }
 
   Future<void> _loadAssetTypes() async {
     setState(() => _loadingAssetTypes = true);
-    final assetTypes = await DatabaseHelper.instance.getAssetTypes();
+    // Generic reference data: repo on web (bundled into payload) / mobile
+    // (SQLite); DatabaseHelper fallback for legacy callers without a repo.
+    final assetTypes = _repo != null
+        ? await _repo!.getReferenceCollection('asset_types')
+        : await DatabaseHelper.instance.getAssetTypes();
+    // Ensure the existing asset's type is present so the dropdown never hits
+    // "value not in items" (editing a submission whose payload predates bundled
+    // referenceData, or a type since removed from the catalog).
+    final seeded = List<Map<String, dynamic>>.from(assetTypes);
+    final existingTypeId = _existingAsset?['asset_type_id'];
+    final existingDetails = _existingAsset?['asset_type_details'];
+    if (existingTypeId != null &&
+        existingDetails is Map &&
+        !seeded.any((t) => t['id'] == existingTypeId)) {
+      seeded.insert(0, Map<String, dynamic>.from(existingDetails));
+    }
+    if (!mounted) return;
     setState(() {
-      _assetTypes = assetTypes;
+      _assetTypes = seeded;
       _loadingAssetTypes = false;
     });
   }
 
   Future<void> _loadAssetStatuses() async {
-    final statuses = await DatabaseHelper.instance.getCollectionItems(
-      'asset_statuses',
-    );
+    final statuses = _repo != null
+        ? await _repo!.getReferenceCollection('asset_statuses')
+        : await DatabaseHelper.instance.getCollectionItems('asset_statuses');
+    final seeded = List<Map<String, dynamic>>.from(statuses);
+    final selectedStatus = (_existingAsset?['status'] ?? '').toString().trim();
+    if (selectedStatus.isNotEmpty &&
+        !seeded.any((s) => (s['name'] ?? '').toString() == selectedStatus)) {
+      seeded.insert(0, <String, dynamic>{'name': selectedStatus});
+    }
+    if (!mounted) return;
     setState(() {
-      _assetStatuses = statuses;
+      _assetStatuses = seeded;
     });
   }
 
@@ -103,13 +139,27 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
     if (_existingAsset == null) return;
     final assetId = _existingAsset!['id'] as int?;
     if (assetId == null) return;
+    final ref = 'asset_$assetId';
 
-    final observations = await DatabaseHelper.instance.getQuestionObservations(
-      _formId!,
-      'asset_$assetId',
-    );
+    // Count via the repo (web: in-memory document; mobile: SQLite-backed) so the
+    // asset editor never touches DatabaseHelper directly on web. Legacy
+    // DatabaseHelper fallback only for a repo-less caller.
+    final int count;
+    if (_repo != null) {
+      final all = await _repo!.getCollection('observations');
+      count = all
+          .where((o) => (o['question_reference'] ?? '').toString() == ref)
+          .length;
+    } else {
+      final observations = await DatabaseHelper.instance.getQuestionObservations(
+        _formId ?? 0,
+        ref,
+      );
+      count = observations.length;
+    }
+    if (!mounted) return;
     setState(() {
-      _observationCount = observations.length;
+      _observationCount = count;
     });
   }
 
@@ -145,11 +195,13 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       '/observations-list',
       arguments: {
         'formId': _formId,
+        'repo': _repo,
         'questionReference': 'asset_$assetId',
         'questionText':
             '$assetTypeName${makeModel.isNotEmpty ? ' - $makeModel' : ''}',
         'sectionName': 'Asset Observations',
         'assetId': assetId,
+        'assetUuid': _existingAsset!['uuid'],
         'assetType': assetTypeName,
         'assetMakeModel': makeModel.isEmpty ? null : makeModel,
       },
@@ -201,10 +253,11 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       await _assetModelFieldKey.currentState?.saveSuggestion();
       await _locationFieldKey.currentState?.saveSuggestion();
 
-      final imagePaths = await persistPickedImagePaths(
-        _images,
-        prefix: 'asset',
-      );
+      // Image persistence is generic: the repo routes to disk (mobile) or the
+      // attachment service (web). Legacy callers (no repo) use the disk helper.
+      final imagePaths = _repo != null
+          ? await _repo!.persistImages(_images, prefix: 'asset')
+          : await persistPickedImagePaths(_images, prefix: 'asset');
 
       // Helper function to convert to camel case
       String toCamelCase(String text) {
@@ -235,27 +288,58 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
             .join(' ');
       }
 
-      await DatabaseHelper.instance.saveAsset(
-        id: _existingAsset?['id'] as int?,
-        formId: _formId!,
-        assetTypeId: _selectedAssetTypeId!,
-        assetMake: _assetMakeController.text.isEmpty
-            ? null
-            : toCamelCase(_assetMakeController.text.trim()),
-        assetModel: _assetModelController.text.isEmpty
-            ? null
-            : toSmartCamelCase(_assetModelController.text.trim()),
-        location: _locationController.text.isEmpty
-            ? null
-            : toCamelCase(_locationController.text.trim()),
-        estimateAge: _estimateAgeController.text.isEmpty
-            ? null
-            : int.tryParse(_estimateAgeController.text),
-        operational: _operational,
-        status: _selectedStatus!,
-        visualCondition: _visualCondition!,
-        imagePaths: imagePaths.isEmpty ? null : imagePaths,
-      );
+      final assetMake = _assetMakeController.text.isEmpty
+          ? null
+          : toCamelCase(_assetMakeController.text.trim());
+      final assetModel = _assetModelController.text.isEmpty
+          ? null
+          : toSmartCamelCase(_assetModelController.text.trim());
+      final location = _locationController.text.isEmpty
+          ? null
+          : toCamelCase(_locationController.text.trim());
+      final estimateAge = _estimateAgeController.text.isEmpty
+          ? null
+          : int.tryParse(_estimateAgeController.text);
+
+      if (_repo != null) {
+        // Single-writer path: build the asset record in the same shape the
+        // payload builder reads (getAssets) and write it into the document.
+        final assetType = _assetTypes.firstWhere(
+          (t) => t['id'] == _selectedAssetTypeId,
+          orElse: () => <String, dynamic>{},
+        );
+        final now = DateTime.now().toIso8601String();
+        await _repo!.saveCollectionItem('assets', <String, dynamic>{
+          if (_existingAsset?['id'] != null) 'id': _existingAsset!['id'],
+          'form_id': _formId,
+          'asset_type_id': _selectedAssetTypeId,
+          'asset_type_details': assetType.isEmpty ? null : assetType,
+          'asset_make': assetMake,
+          'asset_model': assetModel,
+          'location': location,
+          'estimate_age': estimateAge,
+          'operational': _operational,
+          'status': _selectedStatus,
+          'visual_condition': _visualCondition,
+          'images': imagePaths,
+          'created_at': _existingAsset?['created_at'] ?? now,
+          'updated_at': now,
+        });
+      } else {
+        await DatabaseHelper.instance.saveAsset(
+          id: _existingAsset?['id'] as int?,
+          formId: _formId!,
+          assetTypeId: _selectedAssetTypeId!,
+          assetMake: assetMake,
+          assetModel: assetModel,
+          location: location,
+          estimateAge: estimateAge,
+          operational: _operational,
+          status: _selectedStatus!,
+          visualCondition: _visualCondition!,
+          imagePaths: imagePaths.isEmpty ? null : imagePaths,
+        );
+      }
 
       if (mounted) {
         Navigator.pop(context);

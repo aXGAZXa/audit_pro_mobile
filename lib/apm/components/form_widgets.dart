@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'package:audit_pro_mobile/logging/apm_feedback.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 
 import 'package:signature/signature.dart';
 
@@ -886,6 +887,7 @@ class AppQuestionBlock extends StatefulWidget {
   final Function(String) onAnswerChanged;
   final List<String> answerOptions;
   final int? formId;
+  final FormRepository? repo;
   final bool hasObservations;
   final VoidCallback? onObservationsChanged;
 
@@ -898,6 +900,7 @@ class AppQuestionBlock extends StatefulWidget {
     required this.onAnswerChanged,
     this.answerOptions = const ['YES', 'NO', 'NA'],
     this.formId,
+    this.repo,
     this.hasObservations = false,
     this.onObservationsChanged,
   });
@@ -921,6 +924,7 @@ class _AppQuestionBlockState extends State<AppQuestionBlock> {
         'questionReference': widget.questionReference,
         'questionText': widget.questionText,
         'sectionName': widget.sectionName,
+        'repo': widget.repo,
       },
     );
 
@@ -1273,6 +1277,7 @@ class AppMediaBlock extends StatefulWidget {
   final Function(List<XFile>) onImagesChanged;
   final int maxImages;
   final int? formId;
+  final FormRepository? repo;
   final bool hasObservations;
   final VoidCallback? onObservationsChanged;
 
@@ -1285,6 +1290,7 @@ class AppMediaBlock extends StatefulWidget {
     required this.onImagesChanged,
     this.maxImages = 5,
     this.formId,
+    this.repo,
     this.hasObservations = false,
     this.onObservationsChanged,
   });
@@ -1308,6 +1314,7 @@ class _AppMediaBlockState extends State<AppMediaBlock> {
         'questionReference': widget.questionReference,
         'questionText': widget.questionText,
         'sectionName': widget.sectionName,
+        'repo': widget.repo,
       },
     );
 

@@ -95,7 +95,10 @@ try {
         throw "Invalid pubspec version value: '$pubspecVersion'"
     }
 
-    & $FlutterExe build apk --release "--build-name=$buildName" "--build-number=$BuildNumber" "--dart-define-from-file=$definesPath"
+    # --no-tree-shake-icons: the declared-forms runtime renders DATA-DRIVEN icons (non-const IconData
+    # built from the form definition), which Flutter's icon tree-shaker rejects. Required since forms
+    # became data-driven (unification endgame).
+    & $FlutterExe build apk --release --no-tree-shake-icons "--build-name=$buildName" "--build-number=$BuildNumber" "--dart-define-from-file=$definesPath"
     if ($LASTEXITCODE -ne 0) { throw "flutter build apk --release failed" }
 
     $apkPath = Join-Path $projectRootResolved 'build\app\outputs\flutter-apk\app-release.apk'

@@ -1,23 +1,21 @@
 ﻿import 'package:flutter/material.dart';
-import '../../../database/database_helper.dart';
 import '../../../components/form_widgets.dart';
 import '../../../components/entity_card.dart';
-import '../../shared/editor/form_editor_contract.dart';
+import '../../shared/data/form_repository.dart';
 
 class SiteAssetsScreen extends StatefulWidget {
+  /// Injected I/O — assets are a generic collection on the form document.
+  /// ONE screen, both platforms: add/edit always uses the app's AddAssetScreen
+  /// (mobile + web), writing through the repo. No web-only dialog, no mode.
+  final FormRepository repo;
   final int? formId;
-  final Map<String, dynamic> formData;
-  final FormEditorRuntimeMode mode;
-  final void Function(String key, dynamic value)? onDataChanged;
   final VoidCallback onBack;
   final VoidCallback onNext;
 
   const SiteAssetsScreen({
     super.key,
+    required this.repo,
     required this.formId,
-    required this.formData,
-    this.mode = FormEditorRuntimeMode.mobileDraft,
-    this.onDataChanged,
     required this.onBack,
     required this.onNext,
   });
@@ -30,8 +28,6 @@ class _SiteAssetsScreenState extends State<SiteAssetsScreen> {
   List<Map<String, dynamic>> _assets = [];
   bool _isLoading = true;
 
-  bool get _isWebEditorMode => widget.mode == FormEditorRuntimeMode.webEditor;
-
   @override
   void initState() {
     super.initState();
@@ -39,34 +35,10 @@ class _SiteAssetsScreenState extends State<SiteAssetsScreen> {
   }
 
   Future<void> _loadAssets() async {
-    if (_isWebEditorMode) {
-      final raw = widget.formData['assets'];
-      final list = raw is List
-          ? raw
-                .whereType<Map>()
-                .map((e) => Map<String, dynamic>.from(e))
-                .toList()
-          : <Map<String, dynamic>>[];
-      if (mounted) {
-        setState(() {
-          _assets = list;
-          _isLoading = false;
-        });
-      }
-      return;
-    }
-
-    if (widget.formId == null) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-      return;
-    }
-
-    if (mounted) {
-      setState(() => _isLoading = true);
-    }
-    final assets = await DatabaseHelper.instance.getAssets(widget.formId!);
+    if (mounted) setState(() => _isLoading = true);
+    // One source of truth: the form document, via the injected repo. (SQLite on
+    // mobile, server payload on web — the screen no longer knows or cares.)
+    final assets = await widget.repo.getCollection('assets');
     if (mounted) {
       setState(() {
         _assets = assets;
@@ -76,15 +48,10 @@ class _SiteAssetsScreenState extends State<SiteAssetsScreen> {
   }
 
   void _addAsset() {
-    if (_isWebEditorMode) {
-      _openAssetEditor();
-      return;
-    }
-
     Navigator.pushNamed(
       context,
       '/add-asset',
-      arguments: {'formId': widget.formId},
+      arguments: {'formId': widget.formId, 'repo': widget.repo},
     ).then((_) {
       if (mounted) {
         _loadAssets();
@@ -93,15 +60,10 @@ class _SiteAssetsScreenState extends State<SiteAssetsScreen> {
   }
 
   void _editAsset(Map<String, dynamic> asset) {
-    if (_isWebEditorMode) {
-      _openAssetEditor(existing: asset);
-      return;
-    }
-
     Navigator.pushNamed(
       context,
       '/add-asset',
-      arguments: {'formId': widget.formId, 'asset': asset},
+      arguments: {'formId': widget.formId, 'asset': asset, 'repo': widget.repo},
     ).then((_) {
       if (mounted) {
         _loadAssets();
@@ -141,21 +103,15 @@ class _SiteAssetsScreenState extends State<SiteAssetsScreen> {
         'asset_type_details': asset['asset_type_details'],
       };
 
-      if (_isWebEditorMode) {
-        final next = _assets
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList(growable: true);
-        duplicatedAsset['id'] = _nextAssetId();
-        next.add(duplicatedAsset);
-        _persistAssets(next);
-        return;
-      }
-
       if (!mounted) return;
       Navigator.pushNamed(
         context,
         '/add-asset',
-        arguments: {'formId': widget.formId, 'asset': duplicatedAsset},
+        arguments: {
+          'formId': widget.formId,
+          'asset': duplicatedAsset,
+          'repo': widget.repo,
+        },
       ).then((_) {
         if (mounted) {
           _loadAssets();
@@ -184,122 +140,6 @@ class _SiteAssetsScreenState extends State<SiteAssetsScreen> {
       return;
     }
     widget.onNext();
-  }
-
-  int _nextAssetId() {
-    var maxId = 0;
-    for (final row in _assets) {
-      final id = int.tryParse(row['id']?.toString() ?? '') ?? 0;
-      if (id > maxId) maxId = id;
-    }
-    return maxId + 1;
-  }
-
-  void _persistAssets(List<Map<String, dynamic>> assets) {
-    final next = assets
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList(growable: false);
-    setState(() {
-      _assets = next;
-      widget.formData['assets'] = next;
-    });
-    widget.onDataChanged?.call('assets', next);
-  }
-
-  Future<void> _openAssetEditor({Map<String, dynamic>? existing}) async {
-    final typeController = TextEditingController(
-      text: ((existing?['asset_type_details'] as Map?)?['asset_type'] ?? '')
-          .toString(),
-    );
-    final makeController = TextEditingController(
-      text: (existing?['asset_make'] ?? '').toString(),
-    );
-    final modelController = TextEditingController(
-      text: (existing?['asset_model'] ?? '').toString(),
-    );
-    final locationController = TextEditingController(
-      text: (existing?['location'] ?? '').toString(),
-    );
-    final ageController = TextEditingController(
-      text: (existing?['estimate_age'] ?? '').toString(),
-    );
-
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(existing == null ? 'Add Asset' : 'Edit Asset'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: typeController,
-                decoration: const InputDecoration(labelText: 'Asset Type'),
-              ),
-              TextField(
-                controller: makeController,
-                decoration: const InputDecoration(labelText: 'Make'),
-              ),
-              TextField(
-                controller: modelController,
-                decoration: const InputDecoration(labelText: 'Model'),
-              ),
-              TextField(
-                controller: locationController,
-                decoration: const InputDecoration(labelText: 'Location'),
-              ),
-              TextField(
-                controller: ageController,
-                decoration: const InputDecoration(labelText: 'Estimated Age'),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-
-    if (saved != true) return;
-
-    final type = typeController.text.trim();
-    if (type.isEmpty) return;
-
-    final next = _assets
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList(growable: true);
-
-    final asset = <String, dynamic>{
-      ...(existing ?? const <String, dynamic>{}),
-      'id': existing?['id'] ?? _nextAssetId(),
-      'asset_make': makeController.text.trim(),
-      'asset_model': modelController.text.trim(),
-      'location': locationController.text.trim(),
-      'estimate_age': ageController.text.trim(),
-      'asset_type_details': {
-        ...((existing?['asset_type_details'] is Map)
-            ? Map<String, dynamic>.from(existing!['asset_type_details'] as Map)
-            : <String, dynamic>{}),
-        'asset_type': type,
-      },
-    };
-
-    final idx = next.indexWhere((row) => row['id'] == asset['id']);
-    if (idx >= 0) {
-      next[idx] = asset;
-    } else {
-      next.add(asset);
-    }
-
-    _persistAssets(next);
   }
 
   @override
@@ -420,22 +260,12 @@ class _SiteAssetsScreenState extends State<SiteAssetsScreen> {
                                     );
 
                                     if (confirm == true) {
-                                      if (_isWebEditorMode) {
-                                        final next = _assets
-                                            .where(
-                                              (row) => row['id'] != asset['id'],
-                                            )
-                                            .toList(growable: false);
-                                        _persistAssets(next);
-                                      } else {
-                                        await DatabaseHelper.instance
-                                            .deleteAsset(
-                                              asset['id'] as int,
-                                              formId: widget.formId,
-                                            );
-                                        if (mounted) {
-                                          _loadAssets();
-                                        }
+                                      await widget.repo.deleteCollectionItem(
+                                        'assets',
+                                        asset['id'] as Object,
+                                      );
+                                      if (mounted) {
+                                        _loadAssets();
                                       }
                                     }
                                   },

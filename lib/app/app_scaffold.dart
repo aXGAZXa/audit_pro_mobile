@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:gtapp_mobile/gtapp_mobile.dart' as gtmobile;
 
 import '../auth/auth_session.dart';
 import '../auth/auth_storage.dart';
@@ -8,6 +9,7 @@ import '../auth/mobile_auth_api.dart';
 import '../auth/mobile_auth_models.dart';
 import '../logging/apm_feedback.dart';
 import '../logging/apm_logger.dart';
+import 'app_shell_config.dart';
 
 class AppScaffold extends StatelessWidget {
   const AppScaffold({
@@ -41,7 +43,7 @@ class AppScaffold extends StatelessWidget {
           onTap: () => FocusScope.of(context).unfocus(),
           child: Scaffold(
             appBar: AppBar(title: Text(appBarTitle), actions: actions),
-            drawer: AppDrawer(session: session),
+            drawer: _buildDrawer(context),
             body: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -60,6 +62,74 @@ class AppScaffold extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  /// Inherit model: render the DELIVERED menu when one is published for this app,
+  /// otherwise the built-in [AppDrawer] (so the app is byte-identical to today
+  /// when no menu is delivered).
+  Widget _buildDrawer(BuildContext context) {
+    final nav = AppShellConfig.of(context)?.navigation;
+    if (nav != null && nav.items.isNotEmpty) {
+      return _DeliveredDrawer(session: session, navigation: nav);
+    }
+    return AppDrawer(session: session);
+  }
+}
+
+/// Renders a backend-authored navigation drawer via the shared
+/// `toGTMenuItems()` mapper, with the system items (Settings / About / Sign out)
+/// always appended as a footer so essential access is never lost.
+class _DeliveredDrawer extends StatelessWidget {
+  const _DeliveredDrawer({required this.session, required this.navigation});
+
+  final AuthSession session;
+  final gtmobile.AppNavigationConfig navigation;
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = session.state.value;
+    final companyName = (auth?.tenantName ?? '').trim();
+    return gtmobile.GTDrawer(
+      header: Text(companyName.isEmpty ? 'Audit Pro Mobile' : companyName),
+      menuItems: navigation.toGTMenuItems(),
+      footerItems: [
+        const Divider(),
+        ListTile(
+          leading: const Icon(Icons.settings),
+          title: const Text('Settings'),
+          onTap: () {
+            Navigator.pop(context);
+            Navigator.pushNamed(context, '/settings');
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.info_outline),
+          title: const Text('About'),
+          onTap: () {
+            Navigator.pop(context);
+            showDialog<void>(
+              context: context,
+              builder: (_) => const _AboutDialog(),
+            );
+          },
+        ),
+        if (auth != null) ...[
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.logout),
+            title: const Text('Sign out'),
+            onTap: () async {
+              Navigator.pop(context);
+              ApmLogger.info('Signing out', category: 'AppDrawer');
+              await session.signOut();
+              if (!context.mounted) return;
+              ApmFeedback.info(context, 'Signed out.', category: 'AppDrawer');
+              Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
+            },
+          ),
+        ],
+      ],
     );
   }
 }

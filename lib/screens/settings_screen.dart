@@ -7,6 +7,8 @@ import '../apm/services/app_info_service.dart';
 import '../apm/services/apm_portal_update_service.dart';
 import '../apm/services/update_coordinator.dart';
 import '../apm/services/update_state_store.dart';
+import '../apm/forms/generic_skeleton/server_forms_screen.dart';
+import '../apm/forms/generic_skeleton/skeleton_demo_screen.dart';
 import '../app/app_scaffold.dart';
 import '../auth/auth_storage.dart';
 import '../auth/auth_session.dart';
@@ -463,6 +465,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 icon: const Icon(Icons.logout),
                 label: const Text('Sign out'),
               ),
+              if (kDebugMode) ...[
+                const SizedBox(height: 28),
+                const Divider(),
+                const SizedBox(height: 12),
+                Text(
+                  'Developer',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 12),
+                FilledButton.tonalIcon(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const SkeletonDemoScreen(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.science_outlined),
+                  label: const Text('Skeleton Demo (generic forms)'),
+                ),
+                const SizedBox(height: 12),
+                FilledButton.tonalIcon(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const ServerFormsScreen(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.cloud_download_outlined),
+                  label: const Text('Server Forms (beta)'),
+                ),
+              ],
               if (auth != null && canAccessPlatformLogin) ...[
                 const SizedBox(height: 28),
                 const Divider(),

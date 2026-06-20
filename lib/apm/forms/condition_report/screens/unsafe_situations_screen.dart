@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/components/entity_card.dart';
 import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'unsafe_reports_screen.dart';
 
 class UnsafeSituationsScreen extends StatefulWidget {
@@ -10,6 +11,7 @@ class UnsafeSituationsScreen extends StatefulWidget {
   final VoidCallback onNext;
   final VoidCallback onBack;
   final int? formId;
+  final FormRepository? repo;
 
   const UnsafeSituationsScreen({
     super.key,
@@ -17,6 +19,7 @@ class UnsafeSituationsScreen extends StatefulWidget {
     required this.onNext,
     required this.onBack,
     this.formId,
+    this.repo,
   });
 
   @override
@@ -402,6 +405,7 @@ class _UnsafeSituationsScreenState extends State<UnsafeSituationsScreen> {
                         MaterialPageRoute(
                           builder: (context) => UnsafeReportsScreen(
                             formId: widget.formId!,
+                            repo: widget.repo,
                             onBack: () => Navigator.pop(context),
                           ),
                         ),

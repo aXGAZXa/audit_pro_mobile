@@ -21,6 +21,10 @@ class HnaSubmissionPayloadBuilder {
     return _buildFriendlyRef(submittedAt: submittedAt, formUuid: formUuid);
   }
 
+  /// Build the v4 submission envelope for a STORED form (mobile path): load the
+  /// form row + its `form_data` document, then delegate to [buildFromFormSnapshot].
+  /// Thin wrapper so the load and the envelope assembly are the SAME code the
+  /// snapshot path uses (guarded by the v4 golden + the mobile equivalence gate).
   static Future<Map<String, dynamic>?> build({
     required int formId,
     DatabaseHelper? db,
@@ -30,12 +34,53 @@ class HnaSubmissionPayloadBuilder {
     String methodologyVersion = 'v1',
   }) async {
     final database = db ?? DatabaseHelper.instance;
-    final submitTimestamp = submittedAt ?? DateTime.now();
 
     final form = await database.getForm(formId);
     if (form == null) return null;
 
-    final draftDoc = Map<String, dynamic>.from(form['form_data'] as Map);
+    return buildFromFormSnapshot(
+      formSnapshot: Map<String, dynamic>.from(form['form_data'] as Map),
+      formId: form['id'] is int ? form['id'] as int : formId,
+      formUuid: form['uuid'],
+      formType: form['form_type'],
+      status: form['status'],
+      createdAt: form['created_at'],
+      updatedAt: form['updated_at'],
+      submittedAt: submittedAt,
+      computeDerivedIfMissing: computeDerivedIfMissing,
+      recomputeDerived: recomputeDerived,
+      methodologyVersion: methodologyVersion,
+    );
+  }
+
+  /// Assemble the v4 envelope from an in-memory HNA document (the `form_data`
+  /// blob — `repo.formData` on mobile, the `payload['hna']`-derived snapshot on
+  /// web). The single serialization core both platforms converge on (mirrors
+  /// CR's buildFromFormSnapshot). Form-row metadata (id/uuid/status/timestamps)
+  /// is passed in since it lives outside the document. `formUuid` is the RAW row
+  /// value (may be null) — the form section keeps it raw; friendlyRef + summary
+  /// use the stringified form, exactly as the original build() did.
+  static Future<Map<String, dynamic>> buildFromFormSnapshot({
+    required Map<String, dynamic> formSnapshot,
+    required int formId,
+    Object? formUuid,
+    Object? formType,
+    Object? status,
+    Object? createdAt,
+    Object? updatedAt,
+    DateTime? submittedAt,
+    bool computeDerivedIfMissing = true,
+    bool recomputeDerived = false,
+    String methodologyVersion = 'v1',
+    // Web editor supplies the attachment manifest from
+    // FormWebEditorAttachmentContext.buildManifest, which PRESERVES the server's
+    // existing att-ids (so previously-uploaded blobs still resolve for the PDF)
+    // and carries upload metadata. Mobile leaves this null and path-walks.
+    List<Map<String, dynamic>>? attachmentsOverride,
+  }) async {
+    final submitTimestamp = submittedAt ?? DateTime.now();
+
+    final draftDoc = formSnapshot;
     final formData = _readFormDataFromDraft(draftDoc);
     final assetsJson = _readAssetsFromDraft(draftDoc) ?? <String, dynamic>{};
     _ensureAssetsShape(assetsJson);
@@ -97,20 +142,22 @@ class HnaSubmissionPayloadBuilder {
       unreportedUnsafeObservationsJson: unreportedUnsafeJson,
     );
 
-    final attachments = _collectAttachments(
-      formId: formId,
-      formData: formData,
-      assetsJson: assetsJson,
-      observationsJson: observationsJson,
-      unsafeObservationsJson: unsafeObservationsJson,
-      unsafeReportsJson: unsafeReportsJson,
-      unreportedUnsafeObservationsJson: unreportedUnsafeJson,
-    );
+    final attachments =
+        attachmentsOverride ??
+        _collectAttachments(
+          formId: formId,
+          formData: formData,
+          assetsJson: assetsJson,
+          observationsJson: observationsJson,
+          unsafeObservationsJson: unsafeObservationsJson,
+          unsafeReportsJson: unsafeReportsJson,
+          unreportedUnsafeObservationsJson: unreportedUnsafeJson,
+        );
 
-    final formUuid = (form['uuid'] ?? '').toString();
+    final formUuidStr = (formUuid ?? '').toString();
     final friendlyRef = _buildFriendlyRef(
       submittedAt: submitTimestamp,
-      formUuid: formUuid,
+      formUuid: formUuidStr,
     );
 
     final pdfModel = HnaPdfModelBuilder.build(
@@ -134,7 +181,7 @@ class HnaSubmissionPayloadBuilder {
       'submittedAt': submitTimestamp.toIso8601String(),
       'friendlyRef': friendlyRef,
       // Cross-device stable identifier (preferred over the local autoincrement id).
-      'formUuid': formUuid,
+      'formUuid': formUuidStr,
       // Local device identifier (kept for back-compat / debugging).
       'formId': formId,
     };
@@ -142,12 +189,12 @@ class HnaSubmissionPayloadBuilder {
     return {
       'payloadSchemaVersion': payloadSchemaVersion,
       'form': {
-        'id': form['id'],
-        'uuid': form['uuid'],
-        'formType': form['form_type'],
-        'status': form['status'],
-        'createdAt': form['created_at'],
-        'updatedAt': form['updated_at'],
+        'id': formId,
+        'uuid': formUuid,
+        'formType': formType,
+        'status': status,
+        'createdAt': createdAt,
+        'updatedAt': updatedAt,
       },
       'hna': {
         'summary': summary,

@@ -5,6 +5,7 @@ import 'package:audit_pro_mobile/apm/forms/heat_network_assessment/services/hna_
 import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:audit_pro_mobile/apm/forms/shared/editor/form_draft_persistence_service.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 
 /// Web-editor [FormRepository]: the form's working data is the in-memory section
 /// of the server payload (extracted form-specifically at the entry point);
@@ -23,7 +24,8 @@ class WebFormRepository implements FormRepository {
     required String formType,
     required int formId,
     required Map<String, dynamic> initialData,
-    required String Function(Map<String, dynamic> workingData) buildPayloadJson,
+    required Future<String> Function(Map<String, dynamic> workingData)
+        buildPayloadJson,
     FormWebEditorAttachmentContext? attachments,
     bool generatePdfOnSubmit = true,
   })  : _service = service,
@@ -38,7 +40,8 @@ class WebFormRepository implements FormRepository {
   final String _ticket;
   final int _formId;
   final Map<String, dynamic> _data;
-  final String Function(Map<String, dynamic> workingData) _buildPayloadJson;
+  final Future<String> Function(Map<String, dynamic> workingData)
+      _buildPayloadJson;
   final FormWebEditorAttachmentContext _attachments;
   final bool _generatePdf;
 
@@ -122,6 +125,15 @@ class WebFormRepository implements FormRepository {
     final existingIndex =
         incomingId == null ? -1 : _indexOfId(list, incomingId);
     final next = Map<String, dynamic>.from(item);
+    // Stable UUID reconciliation key (additive to id) — the seam the server
+    // feature uses to project/edit models (Capture & Projection). Mint on
+    // create; preserve the existing item's UUID on update.
+    if ((next['uuid'] ?? '').toString().isEmpty) {
+      final existing = existingIndex >= 0 ? list[existingIndex] : null;
+      final existingUuid =
+          existing is Map ? (existing['uuid'] ?? '').toString() : '';
+      next['uuid'] = existingUuid.isNotEmpty ? existingUuid : const Uuid().v4();
+    }
 
     final Object resolvedId;
     if (existingIndex >= 0) {
@@ -185,7 +197,7 @@ class WebFormRepository implements FormRepository {
 
   @override
   Future<String?> submit() async {
-    final payloadJson = _buildPayloadJson(_data);
+    final payloadJson = await _buildPayloadJson(_data);
     await _service.updateSubmission(
       ticket: _ticket,
       payloadJson: payloadJson,
@@ -195,6 +207,20 @@ class WebFormRepository implements FormRepository {
   }
 
   // --- reference data --------------------------------------------------------
+
+  @override
+  Future<List<Map<String, dynamic>>> getReferenceCollection(String name) async {
+    // Reference/catalog data is bundled into the editor payload by the server
+    // (the web build has no on-device DB). Tolerates absence until that lands.
+    final ref = _data['referenceData'];
+    if (ref is Map && ref[name] is List) {
+      return (ref[name] as List)
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    }
+    return const <Map<String, dynamic>>[];
+  }
 
   @override
   Future<List<String>> getClients() => _service.getClients(ticket: _ticket);

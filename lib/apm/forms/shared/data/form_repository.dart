@@ -100,6 +100,13 @@ abstract class FormRepository {
 
   // --- reference data ---------------------------------------------------------
 
+  /// A named reference/lookup list (e.g. `'asset_types'`, `'asset_statuses'`) —
+  /// tenant catalog data the form screens render (dropdowns etc.), NOT form
+  /// instance data. Mobile resolves it from the on-device reference tables; web
+  /// resolves it from the reference data bundled into the editor payload. This
+  /// is what lets the SAME screen run on both platforms with no DB on web.
+  Future<List<Map<String, dynamic>>> getReferenceCollection(String name);
+
   Future<List<String>> getClients();
 
   Future<List<String>> getSuggestions({

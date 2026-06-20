@@ -1,7 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:audit_pro_mobile/apm/components/form_widgets.dart';
 import 'package:audit_pro_mobile/apm/components/app_scaffold.dart';
-import 'package:audit_pro_mobile/apm/database/database_helper.dart';
+import 'package:audit_pro_mobile/apm/forms/shared/data/form_repository.dart';
 import 'package:audit_pro_mobile/logging/apm_feedback.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -18,6 +18,7 @@ class _AddPlantRoomScreenState extends State<AddPlantRoomScreen> {
   bool _didInitFromArgs = false;
 
   int? _formId;
+  FormRepository? _repo;
   Map<String, dynamic>? _existingPlantRoom;
 
   List<XFile> _plantRoomAccessImages = [];
@@ -39,6 +40,7 @@ class _AddPlantRoomScreenState extends State<AddPlantRoomScreen> {
     _didInitFromArgs = true;
     if (args != null) {
       _formId = args['formId'] as int?;
+      _repo = args['repo'] as FormRepository?;
       _existingPlantRoom = args['plantRoom'] as Map<String, dynamic>?;
 
       if (_existingPlantRoom != null) {
@@ -75,9 +77,10 @@ class _AddPlantRoomScreenState extends State<AddPlantRoomScreen> {
     }
 
     final plantRoomId = _existingPlantRoom!['id'] as int;
-    final responses = await DatabaseHelper.instance.getPlantRoomResponses(
-      plantRoomId,
-    );
+    final item = await _repo?.getCollectionItem('plantRooms', plantRoomId);
+    final responses = (item?['responses'] is Map)
+        ? Map<String, dynamic>.from(item!['responses'] as Map)
+        : <String, dynamic>{};
 
     if (mounted) {
       setState(() {
@@ -143,7 +146,11 @@ class _AddPlantRoomScreenState extends State<AddPlantRoomScreen> {
     await Navigator.pushNamed(
       context,
       '/plant-room-$subsection',
-      arguments: {'formId': _formId, 'plantRoomId': _existingPlantRoom!['id']},
+      arguments: {
+        'formId': _formId,
+        'plantRoomId': _existingPlantRoom!['id'],
+        'repo': _repo,
+      },
     );
 
     if (mounted) {
@@ -159,22 +166,49 @@ class _AddPlantRoomScreenState extends State<AddPlantRoomScreen> {
       }
       return;
     }
+    final repo = _repo;
+    if (repo == null) {
+      if (mounted) {
+        ApmFeedback.error(context, 'Form repository unavailable');
+      }
+      return;
+    }
 
-    final plantRoomId = await DatabaseHelper.instance.savePlantRoom(
-      id: _existingPlantRoom?['id'] as int?,
-      formId: _formId!,
-      location: _locationController.text.trim(),
-      accessImagePaths: _plantRoomAccessImages.map((img) => img.path).toList(),
-      internalImagePaths: _plantRoomInternalImages
-          .map((img) => img.path)
-          .toList(),
-    );
+    // Single-writer path: upsert the plant room into the form document,
+    // PRESERVING the nested subsection `responses` (written by the detail
+    // screens) so saving the record here never wipes them.
+    final existingId = _existingPlantRoom?['id'];
+    final existingItem = existingId != null
+        ? await repo.getCollectionItem('plantRooms', existingId)
+        : null;
+    final existingResponses = (existingItem?['responses'] is Map)
+        ? Map<String, dynamic>.from(existingItem!['responses'] as Map)
+        : ((_existingPlantRoom?['responses'] is Map)
+              ? Map<String, dynamic>.from(_existingPlantRoom!['responses'] as Map)
+              : <String, dynamic>{});
+    final now = DateTime.now().toIso8601String();
+    final location = _locationController.text.trim();
+
+    final plantRoomId = await repo.saveCollectionItem('plantRooms', <String, dynamic>{
+      if (existingId != null) 'id': existingId,
+      'form_id': _formId,
+      'location': location,
+      'accessImages': _plantRoomAccessImages.map((img) => img.path).toList(),
+      'internalImages': _plantRoomInternalImages.map((img) => img.path).toList(),
+      'responses': existingResponses,
+      'created_at':
+          existingItem?['created_at'] ??
+          _existingPlantRoom?['created_at'] ??
+          now,
+      'updated_at': now,
+    });
 
     // Always retain resolved ID locally so subsequent saves update this record.
     _existingPlantRoom = {
       ...?_existingPlantRoom,
       'id': plantRoomId,
-      'location': _locationController.text.trim(),
+      'location': location,
+      'responses': existingResponses,
     };
 
     // Reload subsection data to ensure completion status is current
