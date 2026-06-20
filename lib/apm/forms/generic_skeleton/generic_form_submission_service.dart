@@ -68,6 +68,7 @@ class GenericFormSubmissionService {
     required String formType,
     required String formDefinitionId,
     required int formDefinitionVersion,
+    int formRevision = 0,
     required Map<String, dynamic> responseJson,
     gtmobile.FormPackage? package,
   }) async {
@@ -88,11 +89,18 @@ class GenericFormSubmissionService {
       responseJson: responseJson,
     );
 
+    // Envelope v2 (Forms Platform): self-describing `form` + `submission` identity blocks. `origin`
+    // is SERVER-STAMPED at ingest (never sent by the device). The answers-array + signatures-as-
+    // attachments reshape lands with the DocGen v2 walker (the consumer); `response` is kept until then.
     final envelope = <String, dynamic>{
-      'formType': formType,
-      'formDefinitionId': formDefinitionId,
-      'formDefinitionVersion': formDefinitionVersion,
-      'clientResponseId': clientResponseId,
+      'envelopeSchema': 2,
+      'form': <String, dynamic>{
+        'id': formDefinitionId,
+        'ref': formType,
+        'schemaVersion': formDefinitionVersion,
+        'revision': formRevision,
+      },
+      'submission': <String, dynamic>{'id': clientResponseId},
       'submittedAtUtc': DateTime.now().toUtc().toIso8601String(),
       'appVersion': '${appVersion.name}+${appVersion.code}',
       'response': responseJson,
