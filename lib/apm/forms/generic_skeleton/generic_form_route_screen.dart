@@ -37,13 +37,44 @@ class _GenericFormRouteScreenState extends State<GenericFormRouteScreen> {
           );
         }
         if (snapshot.hasError || !snapshot.hasData) {
+          // Engine guard: this form needs controls a newer app build provides.
+          final err = snapshot.error;
+          if (err is gtmobile.FormEngineTooOldException) {
+            return Scaffold(
+              appBar: AppBar(title: const Text('Update required')),
+              body: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.system_update, size: 48),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'This form needs a newer version of the app.',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'It uses features this app build does not support yet: '
+                        '${err.unsupportedTypes.join(", ")}.\n\n'
+                        'Please update Audit Pro Mobile to fill in this form.',
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
           return Scaffold(
             appBar: AppBar(title: const Text('Form')),
             body: Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Text(
-                  'Could not load this form.\n${snapshot.error ?? ''}',
+                  'Could not load this form.\n${err ?? ''}',
                   textAlign: TextAlign.center,
                 ),
               ),

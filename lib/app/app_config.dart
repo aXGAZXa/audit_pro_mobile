@@ -19,6 +19,14 @@ class AppConfig {
     defaultValue: '',
   );
 
+  /// Per-app key (the wrapper-app handshake): identifies WHICH registered app this build is, so the portal
+  /// returns this app's forms/config. Sent as X-APP-KEY alongside the fixed X-API-KEY. Minted in the portal
+  /// (register / regenerate); empty = behave as the default app (legacy APM behaviour).
+  static const String _appKey = String.fromEnvironment(
+    'APM_APP_KEY',
+    defaultValue: '',
+  );
+
   static const String _definesSource = String.fromEnvironment(
     'APM_DEFINES_SOURCE',
     defaultValue: '',
@@ -46,6 +54,8 @@ class AppConfig {
   }
 
   static String get mobileAuthApiKey => _mobileAuthApiKey.trim();
+
+  static String get appKey => _appKey.trim();
 
   static String get definesSource => _definesSource.trim();
 

@@ -4,6 +4,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:gtapp_mobile/gtapp_mobile.dart' as gtmobile;
 
 import '../auth/auth_session.dart';
+import '../auth/jwt_payload.dart';
 import '../auth/auth_storage.dart';
 import '../auth/mobile_auth_api.dart';
 import '../auth/mobile_auth_models.dart';
@@ -194,6 +195,19 @@ class AppDrawer extends StatelessWidget {
               Navigator.pushNamed(context, '/submissions');
             },
           ),
+          // Developer-only: in-dev (unpublished) forms for THIS app. Gated by the signed is_developer claim.
+          if (JwtPayload.tryParse(auth?.token)?.isDeveloper ?? false) ...[
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.science_outlined),
+              title: const Text('Developer'),
+              subtitle: const Text('Dev forms (unpublished)'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/developer');
+              },
+            ),
+          ],
           if (hasPlatformJwt && platformBioEnabled) ...[
             const Divider(),
             ListTile(

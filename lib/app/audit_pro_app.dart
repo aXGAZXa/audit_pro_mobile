@@ -5,6 +5,7 @@ import '../auth/auth_session.dart';
 import '../auth/login_screen.dart';
 import '../logging/apm_logger.dart';
 import 'app_shell_config.dart';
+import '../apm/forms/generic_skeleton/developer_forms_screen.dart';
 import '../apm/forms/generic_skeleton/generic_form_route_screen.dart';
 import '../screens/delivered_screen_screen.dart';
 import '../apm/components/add_asset_screen.dart';
@@ -374,6 +375,7 @@ class _AuditProAppState extends State<AuditProApp> with WidgetsBindingObserver {
               ),
               '/settings': (context) => SettingsScreen(session: _session),
               '/submissions': (context) => SubmissionsScreen(session: _session),
+              '/developer': (context) => const DeveloperFormsScreen(),
             },
             onGenerateRoute: (settings) {
               // Backend-driven menu taps encode "open form" as `form:<id>`

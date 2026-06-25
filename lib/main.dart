@@ -44,6 +44,13 @@ Future<void> main() async {
   // non-disruptive — the live hard-coded CR/HNA screens do not use these.
   registerFormComponents();
   registerQuestionWidgets();
+  // Container/element widget builders (sections, cards, conditionals, AND the
+  // CollectionSection + ReviewSection builders) live in a SEPARATE registry from
+  // the question widgets. Without this, nested container elements render as
+  // "Unsupported element" (e.g. a declared form's reviewSection / collections).
+  // Must run AFTER registerQuestionWidgets() — it adapts the registered question
+  // types into the form-widget registry.
+  registerFormWidgets();
 
   ApmLogger.info(
     'AuditPro Mobile starting '

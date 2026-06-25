@@ -47,6 +47,14 @@ class JwtPayload {
     return s == 'true' || s == '1' || s == 'yes';
   }
 
+  /// Server-signed developer flag (SuperUser or Developer role). Gates the Developer page + dev forms.
+  bool get isDeveloper {
+    final v = claims['is_developer'];
+    if (v is bool) return v;
+    final s = (v ?? '').toString().trim().toLowerCase();
+    return s == 'true' || s == '1' || s == 'yes';
+  }
+
   static String _normalizeBase64Url(String input) {
     final normalized = input.replaceAll('-', '+').replaceAll('_', '/');
     switch (normalized.length % 4) {

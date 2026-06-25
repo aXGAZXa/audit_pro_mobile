@@ -563,9 +563,21 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
     final gtmobile.FormPackage package;
     if (snapshotDefinitionJson.isNotEmpty) {
       final decodedDef = jsonDecode(snapshotDefinitionJson);
-      package = gtmobile.FormPackage.fromJson(
-        Map<String, dynamic>.from(decodedDef as Map),
-      );
+      final defMap = Map<String, dynamic>.from(decodedDef as Map);
+      // Engine guard (Tier 1): block forms using controls this build can't render.
+      gtmobile.FormEngineGuard.assertRenderable(defMap);
+      // Document model: the server sends the bare FormDefinition NODE plucked from the app
+      // document, plus a sibling `dataModels` map (the form's collections) so collectionSection /
+      // reviewSection resolve their DataModelConfig. A legacy FormPackage
+      // ({formDefinition:...,screenConfig:...}) is still accepted; a bare node is wrapped with
+      // canonical defaults (screen/theme) + its dataModels so it renders + edits.
+      package = defMap.containsKey('formDefinition')
+          ? gtmobile.FormPackage.fromJson(defMap)
+          : gtmobile.FormPackage.withDefaults(
+              gtmobile.FormDefinition.fromJson(defMap),
+              dataModels:
+                  gtmobile.FormPackage.parseDataModels(defMap['dataModels']),
+            );
     } else {
       final catalog = FormDefinitionCatalogService();
       package = envelopeDefinitionId.isNotEmpty
@@ -584,12 +596,19 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
     gtmobile.GTFileManagerConfig.remoteImageResolver = (String imageId) async {
       final id = imageId.trim();
       if (id.isEmpty) return null;
+      // Just-added images live in the byte cache until the submission is saved
+      // (the content endpoint only serves persisted attachments). Serve them
+      // from cache so the gallery + collection card show them immediately.
+      final cached = gtmobile.GTFileManagerConfig.imageBytesCache[id];
+      if (cached != null) return cached;
       try {
         final bytes = await service.getAttachmentBytes(
           ticket: ticket,
           attachmentId: id,
         );
-        return Uint8List.fromList(bytes);
+        final out = Uint8List.fromList(bytes);
+        gtmobile.GTFileManagerConfig.imageBytesCache[id] = out;
+        return out;
       } catch (e) {
         _logDiag('generic-remote-image-failed', {
           'ticket': _ticketPreview(ticket),
@@ -629,6 +648,9 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
             fileName: fileName,
             contentType: contentType,
           );
+          // Cache the bytes so the new image renders instantly (gallery + card)
+          // before the submission is saved/registered server-side.
+          gtmobile.GTFileManagerConfig.imageBytesCache[attachmentId] = bytes;
           _genericAttachmentManifest[attachmentId] =
               Map<String, dynamic>.from(record);
           _logDiag('generic-remote-image-added', {
@@ -812,6 +834,32 @@ class _ApmWebEditorScreenState extends State<ApmWebEditorScreen> {
         }
       } else if (answer is String && answer.trim().isNotEmpty) {
         referenced.add(answer.trim());
+      }
+    }
+
+    // COLLECTION-item images live under state.collections (not state.answers),
+    // so the top-level walk above misses them. Include any id the manifest knows
+    // about (covers just-added AND previously-saved attachments, since the
+    // manifest is seeded from the envelope on load) — manifest-gating avoids
+    // mistaking ordinary text answers for attachment ids.
+    void addIfKnown(String? raw) {
+      final id = raw?.trim() ?? '';
+      if (id.isNotEmpty && _genericAttachmentManifest.containsKey(id)) {
+        referenced.add(id);
+      }
+    }
+
+    for (final items in state.collections.values) {
+      for (final item in items) {
+        for (final v in item.answers.values) {
+          if (v is List) {
+            for (final e in v) {
+              addIfKnown(e?.toString());
+            }
+          } else if (v is String) {
+            addIfKnown(v);
+          }
+        }
       }
     }
 

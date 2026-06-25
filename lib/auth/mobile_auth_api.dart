@@ -14,6 +14,12 @@ class MobileAuthApi {
     if (apiKey.isNotEmpty) {
       headers['X-API-KEY'] = apiKey;
     }
+    // Per-app key (the wrapper-app handshake): the portal resolves it → app_id on the issued JWT, so this
+    // app gets ITS forms. Sent only when configured; absent = legacy default-app behaviour.
+    final appKey = AppConfig.appKey;
+    if (appKey.isNotEmpty) {
+      headers['X-APP-KEY'] = appKey;
+    }
     return headers;
   }
 

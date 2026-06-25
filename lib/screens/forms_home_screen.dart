@@ -3,6 +3,7 @@ import 'package:gtapp_mobile/gtapp_mobile.dart' as gtmobile;
 
 import '../app/app_scaffold.dart';
 import '../app/app_shell_config.dart';
+import 'widgets/form_card.dart';
 import '../apm/database/database_helper.dart';
 import '../apm/forms/condition_report/condition_report_definition.dart';
 import '../apm/forms/condition_report/condition_report_screen.dart';
@@ -90,35 +91,58 @@ class _FormsHomeScreenState extends State<FormsHomeScreen> {
     return AppScaffold(
       title: 'Data Capture Forms',
       session: widget.session,
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildFormCard(
-              context,
-              title: 'Heat Network Assessment',
-              icon: Icons.network_check,
-              color: Colors.deepOrange.shade400,
-              onTap: () async {
-                await _openHnaFromHome(context);
-              },
-            ),
-            const SizedBox(height: 12),
-            _buildFormCard(
-              context,
-              title: 'Condition Report',
-              icon: Icons.assignment,
-              color: Colors.blue.shade400,
-              onTap: () async {
-                await _openCrFromHome(context);
-              },
-            ),
-            _buildDeclaredFormsSection(context),
-          ],
+      body: RefreshIndicator(
+        onRefresh: () async {
+          _refreshForms();
+          await _declaredFormsFuture;
+        },
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Legacy bespoke features (HNA, Condition Report) are HIDDEN for the app-driven POC — the
+              // home now shows only the forms delivered for THIS app (via its app key). Code kept intact
+              // for reference; flip _showLegacyFeatures to restore the tiles.
+              if (_showLegacyFeatures) ...[
+                _buildFormCard(
+                  context,
+                  title: 'Heat Network Assessment',
+                  icon: Icons.network_check,
+                  color: Colors.deepOrange.shade400,
+                  onTap: () async {
+                    await _openHnaFromHome(context);
+                  },
+                ),
+                const SizedBox(height: 12),
+                _buildFormCard(
+                  context,
+                  title: 'Condition Report',
+                  icon: Icons.assignment,
+                  color: Colors.blue.shade400,
+                  onTap: () async {
+                    await _openCrFromHome(context);
+                  },
+                ),
+              ],
+              _buildDeclaredFormsSection(context),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  /// POC: hide the hardcoded bespoke feature tiles (HNA, CR). The app-key handshake delivers this app's
+  /// forms instead. Kept as a flag (not deleted) so the legacy tiles + their open handlers remain reference.
+  final bool _showLegacyFeatures = false;
+
+  /// Re-fetch the delivered forms for this app (the menu-derived "refresh form definitions" action).
+  void _refreshForms() {
+    setState(() {
+      _declaredFormsFuture = _loadDeclaredForms();
+    });
   }
 
   /// The ADDITIVE declared-forms section. Sits BELOW the hardcoded CR/HNA cards.
@@ -130,43 +154,53 @@ class _FormsHomeScreenState extends State<FormsHomeScreen> {
     return FutureBuilder<List<FormDefinitionSummary>>(
       future: _declaredFormsFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
-            child: Center(
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          );
-        }
-
+        final loading = snapshot.connectionState != ConnectionState.done;
         final forms = snapshot.data ?? const <FormDefinitionSummary>[];
-        if (forms.isEmpty) {
-          // Empty or failed → nothing extra; hardcoded cards stand alone.
-          return const SizedBox.shrink();
-        }
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(height: 24),
+            // Header + the menu-derived "refresh form definitions" action (re-fetches this app's forms).
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Text(
-                'Forms',
-                style: Theme.of(context).textTheme.titleMedium,
+              padding: const EdgeInsets.fromLTRB(8, 4, 0, 0),
+              child: Row(
+                children: [
+                  Text('Forms', style: Theme.of(context).textTheme.titleMedium),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    tooltip: 'Refresh form definitions',
+                    onPressed: loading ? null : _refreshForms,
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            for (final form in forms) ...[
+            const SizedBox(height: 4),
+            if (loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              )
+            else if (forms.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 16),
+                child: Text(
+                  'No forms delivered for this app yet. Define and publish forms in the portal, then tap refresh.',
+                ),
+              )
+            else
+              for (final form in forms) ...[
               _buildFormCard(
                 context,
                 title: form.displayName,
                 description:
-                    form.formType.isNotEmpty ? form.formType : null,
+                    'Live v${form.schemaVersion}.${form.revision}',
                 icon: Icons.description_outlined,
                 color: Colors.teal.shade400,
                 trailing: _openingDeclaredId == form.id
@@ -389,49 +423,15 @@ class _FormsHomeScreenState extends State<FormsHomeScreen> {
     required Color color,
     required VoidCallback onTap,
     Widget? trailing,
-  }) {
-    return Card(
-      child: InkWell(
+  }) =>
+      FormCard(
+        title: title,
+        description: description,
+        icon: icon,
+        color: color,
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, size: 32, color: color),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: Theme.of(context).textTheme.titleLarge),
-                    if (description != null &&
-                        description.trim().isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        description,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              trailing ?? const Icon(Icons.chevron_right),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+        trailing: trailing,
+      );
 }
 
 enum _HomeFormChoice { cancel, startNew, resumeExisting }
